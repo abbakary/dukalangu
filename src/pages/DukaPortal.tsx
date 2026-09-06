@@ -1513,6 +1513,7 @@ export default function DukaPortal() {
                     customers={customers}
                     products={products}
                     sales={sales}
+                    expenses={expenses}
                     currentUser={currentUser}
                     userRole={userRole}
                     onNavigate={setActiveTab}

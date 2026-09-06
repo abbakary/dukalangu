@@ -186,6 +186,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       unit: getDefaultUnit(businessType),
       batchNumber: showBatch ? `BT-${new Date().getFullYear()}-01` : '',
       expiryDate: showExpiry ? '2028-06-30' : '',
+      supplierName: suppliers[0]?.name || '',
+      supplierId: suppliers[0]?.id || '',
     });
     setIsAddingProduct(true);
   };
@@ -201,6 +203,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     unit: defaultUnit,
     batchNumber: showBatch ? `BT-${new Date().getFullYear()}-01` : '',
     expiryDate: showExpiry ? '2028-06-30' : '',
+    supplierName: suppliers[0]?.name || '',
+    supplierId: suppliers[0]?.id || '',
   });
 
   // Manual Stock In State
@@ -324,6 +328,19 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newProduct.name) return;
+    if (!newProduct.supplierName?.trim()) {
+      triggerToast(isSw ? 'Msambazaji anahitajika' : 'Supplier is required');
+      return;
+    }
+    if (Number(newProduct.cost) <= 0) {
+      triggerToast(isSw ? 'Bei ya kununua lazima iwe zaidi ya sifuri' : 'Cost price must be greater than zero');
+      return;
+    }
+
+    const supplierMeta: Record<string, string> = {
+      supplier_name: newProduct.supplierName.trim(),
+    };
+    if (newProduct.supplierId) supplierMeta.supplier_id = newProduct.supplierId;
 
     const payload = {
       ...productToApiPayload({
@@ -340,7 +357,10 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
         requiresPrescription: Boolean(dynamicFields.requires_prescription),
         businessType,
       }),
-      metadata_json: dynamicFields.metadata,
+      metadata_json: {
+        ...(dynamicFields.metadata || {}),
+        ...supplierMeta,
+      },
       business_type: businessType,
     };
     const tempId = `local-prod-${Date.now()}`;
@@ -1090,6 +1110,40 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               values={dynamicFields}
               onChange={setDynamicFields}
             />
+
+            <div>
+              <label className="block font-semibold text-[#323130] mb-1">
+                {isSw ? 'Msambazaji *' : 'Supplier *'}
+              </label>
+              {suppliers.length > 0 ? (
+                <select
+                  required
+                  value={newProduct.supplierId || newProduct.supplierName}
+                  onChange={e => {
+                    const sel = suppliers.find(s => s.id === e.target.value);
+                    setNewProduct({
+                      ...newProduct,
+                      supplierId: sel?.id || '',
+                      supplierName: sel?.name || e.target.value,
+                    });
+                  }}
+                  className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white outline-none"
+                >
+                  {suppliers.map(s => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  required
+                  placeholder={isSw ? 'Jina la msambazaji' : 'Supplier name'}
+                  value={newProduct.supplierName}
+                  onChange={e => setNewProduct({ ...newProduct, supplierName: e.target.value, supplierId: '' })}
+                  className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white outline-none"
+                />
+              )}
+            </div>
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div>

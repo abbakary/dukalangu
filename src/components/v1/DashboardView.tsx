@@ -60,7 +60,7 @@ import {
   Legend, 
   ReferenceLine 
 } from 'recharts';
-import { Customer, Language, SaleTransaction, Product, AuthUser, UserRole, BusinessType } from '@/types/v1';
+import { Customer, Language, SaleTransaction, Product, AuthUser, UserRole, BusinessType, ExpenseItem } from '@/types/v1';
 import { getTranslation, formatTSh } from '@/utils/translations';
 import { exportSalesReport } from '@/utils/reportGenerator';
 import { ActionBar } from '@/components/v1/ActionBar';
@@ -93,6 +93,7 @@ interface DashboardViewProps {
   customers: Customer[];
   products: Product[];
   sales: SaleTransaction[];
+  expenses?: ExpenseItem[];
   currentUser?: AuthUser | null;
   userRole?: UserRole;
   businessType?: BusinessType;
@@ -107,6 +108,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   customers,
   products,
   sales,
+  expenses = [],
   currentUser,
   userRole = 'vendor_owner',
   businessType = 'retail',
@@ -146,7 +148,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   // Aggregations from live sales data
   const totalSalesRevenue = useMemo(() => computeTotalRevenue(sales), [sales]);
   const totalCost = useMemo(() => computeTotalCOGS(sales, products), [sales, products]);
-  const totalOperatingExpenses = 0;
+  const totalOperatingExpenses = useMemo(
+    () => expenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0),
+    [expenses],
+  );
   const netProfit = totalSalesRevenue - totalCost - totalOperatingExpenses;
   const netMarginPercent = totalSalesRevenue > 0
     ? Math.round((netProfit / totalSalesRevenue) * 1000) / 10
