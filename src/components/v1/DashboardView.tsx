@@ -421,7 +421,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             >
               <div className="flex items-center justify-between gap-1.5">
                 <span className="text-[10px] font-semibold text-[#605E5C] leading-tight">
-                  {isSw ? 'Faida Halisi' : 'Net Profit'}
+                  {isSw ? 'Pesa Unayobaki' : 'Money You Keep'}
                 </span>
                 <div className="w-6 h-6 rounded-md bg-[#107C10]/10 text-[#107C10] flex items-center justify-center shrink-0">
                   <TrendingUp className="w-3 h-3" />
@@ -432,7 +432,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   <span className="text-xs sm:text-sm font-black text-[#107C10] tabular-nums leading-snug break-words">{formatTSh(netProfit)}</span>
                   <span className="text-[9px] font-bold text-emerald-700 bg-emerald-100 px-1 py-px rounded shrink-0">{netMarginPercent}%</span>
                 </div>
-                <span className="text-[9px] text-[#605E5C] leading-tight mt-0.5 block">{isSw ? 'Baada ya COGS & Posho' : 'After COGS & stipends'}</span>
+                <span className="text-[9px] text-[#605E5C] leading-tight mt-0.5 block">{isSw ? 'Baada ya kununua bidhaa na matumizi' : 'After stock purchases & shop bills'}</span>
               </div>
               <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#107C10] rounded-b-lg" />
             </div>
@@ -501,7 +501,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   <div className="flex items-center gap-2">
                     <span className="w-3 h-3 rounded-full bg-[#6264A7]"></span>
                     <h3 className="font-bold text-sm text-[#323130]">
-                      {isSw ? 'Mwenendo wa Mauzo, Malengo na Faida Halisi' : 'Sales Revenue, Target & Net Profit Composed Performance'}
+                      {isSw ? 'Mwenendo wa Mauzo, Malengo na Pesa Unayobaki' : 'Sales Revenue, Target & Money You Keep'}
                     </h3>
                   </div>
                   <p className="text-[11px] text-[#605E5C] mt-0.5">
@@ -580,7 +580,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                                   <span className="text-slate-300">{formatTSh(data.target)}</span>
                                 </div>
                                 <div className="flex justify-between gap-4 text-emerald-400 font-bold border-t border-white/10 pt-1">
-                                  <span>Faida Halisi:</span>
+                                  <span>{isSw ? 'Pesa Unayobaki:' : 'Money You Keep:'}</span>
                                   <span>{formatTSh(data.netProfit)} ({data.margin}%)</span>
                                 </div>
                               </div>
@@ -597,7 +597,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     />
                     <Bar dataKey="target" name={isSw ? 'Lengo (Target)' : 'Target'} fill="#E2E8F0" radius={[4, 4, 0, 0]} maxBarSize={32} />
                     <Area type="monotone" dataKey="revenue" name={isSw ? 'Mauzo Halisi' : 'Actual Revenue'} stroke="#6264A7" strokeWidth={2.5} fillOpacity={1} fill="url(#colorRevenue)" />
-                    <Line type="monotone" dataKey="netProfit" name={isSw ? 'Faida Halisi' : 'Net Profit'} stroke="#107C10" strokeWidth={2.5} dot={{ r: 4, fill: '#107C10' }} />
+                    <Line type="monotone" dataKey="netProfit" name={isSw ? 'Pesa Unayobaki' : 'Money You Keep'} stroke="#107C10" strokeWidth={2.5} dot={{ r: 4, fill: '#107C10' }} />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>

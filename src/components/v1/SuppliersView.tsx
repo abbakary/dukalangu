@@ -1285,14 +1285,14 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
                     onChange={setPoDynamicFields}
                   />
 
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-[11px] font-semibold text-[#605E5C] mb-1">SKU / Code</label>
                       <input
                         type="text"
                         value={customItemForm.sku}
                         onChange={e => setCustomItemForm({ ...customItemForm, sku: e.target.value })}
-                        className="w-full px-3 py-1.5 bg-white border border-[#C8C6C4] rounded-lg outline-none"
+                        className="w-full px-3 py-2.5 bg-white border border-[#C8C6C4] rounded-lg outline-none text-sm font-medium"
                       />
                     </div>
                     <div>
@@ -1300,40 +1300,49 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
                       <select
                         value={customItemForm.unit}
                         onChange={e => setCustomItemForm({ ...customItemForm, unit: e.target.value })}
-                        className="w-full px-3 py-1.5 bg-white border border-[#C8C6C4] rounded-lg outline-none"
+                        className="w-full px-3 py-2.5 bg-white border border-[#C8C6C4] rounded-lg outline-none text-sm font-medium"
                       >
                         {workplace.default_units.map(u => <option key={u} value={u}>{u}</option>)}
                       </select>
                     </div>
                     <div>
-                      <label className="block text-[11px] font-semibold text-[#605E5C] mb-1">{isSw ? 'Idadi' : 'Qty Ordered'}</label>
+                      <label className="block text-[11px] font-semibold text-[#605E5C] mb-1">{isSw ? 'Idadi' : 'Quantity'}</label>
                       <input
                         type="number"
+                        min="1"
                         value={customItemForm.quantity}
                         onChange={e => setCustomItemForm({ ...customItemForm, quantity: Number(e.target.value) })}
-                        className="w-full px-3 py-1.5 bg-white border border-[#C8C6C4] rounded-lg outline-none"
+                        className="w-full px-3 py-2.5 bg-white border border-[#C8C6C4] rounded-lg outline-none text-base font-semibold"
                       />
                     </div>
                     <div>
-                      <label className="block text-[11px] font-semibold text-[#605E5C] mb-1">{isSw ? 'Gharama (TSh)' : 'Unit Cost (TSh)'}</label>
-                      <input
-                        type="number"
-                        value={customItemForm.costPrice}
-                        onChange={e => setCustomItemForm({ ...customItemForm, costPrice: Number(e.target.value) })}
-                        className="w-full px-3 py-1.5 bg-white border border-[#C8C6C4] rounded-lg outline-none"
-                      />
+                      <label className="block text-[11px] font-semibold text-[#605E5C] mb-1">{isSw ? 'Bei ya kununua (kwa kipimo)' : 'Buy price (per unit)'}</label>
+                      <div className="relative">
+                        <input
+                          type="number"
+                          min="0"
+                          value={customItemForm.costPrice}
+                          onChange={e => setCustomItemForm({ ...customItemForm, costPrice: Number(e.target.value) })}
+                          className="w-full px-3 py-2.5 pr-12 bg-white border border-[#C8C6C4] rounded-lg outline-none text-base font-semibold"
+                        />
+                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-bold text-[#605E5C]">TSh</span>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[11px] font-semibold text-[#605E5C] mb-1">{isSw ? 'Bei ya Uuzaji (TSh)' : 'Selling Price (TSh)'}</label>
-                      <input
-                        type="number"
-                        value={customItemForm.sellingPrice}
-                        onChange={e => setCustomItemForm({ ...customItemForm, sellingPrice: Number(e.target.value) })}
-                        className="w-full px-3 py-1.5 bg-white border border-[#C8C6C4] rounded-lg outline-none"
-                      />
+                      <label className="block text-[11px] font-semibold text-[#605E5C] mb-1">{isSw ? 'Bei ya uuzaji' : 'Selling price'}</label>
+                      <div className="relative">
+                        <input
+                          type="number"
+                          min="0"
+                          value={customItemForm.sellingPrice}
+                          onChange={e => setCustomItemForm({ ...customItemForm, sellingPrice: Number(e.target.value) })}
+                          className="w-full px-3 py-2.5 pr-12 bg-white border border-[#C8C6C4] rounded-lg outline-none text-base font-semibold"
+                        />
+                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-bold text-[#605E5C]">TSh</span>
+                      </div>
                     </div>
                     {showBatch && (
                     <div>

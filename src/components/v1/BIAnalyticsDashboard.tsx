@@ -327,15 +327,19 @@ export const BIAnalyticsDashboard: React.FC<BIAnalyticsDashboardProps> = ({
           </div>
 
           <div className="bg-white/5 rounded-xl p-3.5 border border-white/10">
-            <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider block">COGS (Gharama ya Bidhaa)</span>
+            <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider block">
+              {isSw ? 'Gharama ya Kununua Bidhaa' : 'Stock Purchase Cost'}
+            </span>
             <span className="text-lg font-black text-amber-300 block mt-1">{formatTSh(totalCOGS)}</span>
             <span className="text-[10px] text-slate-300 font-medium block mt-0.5">
-              {cogsSharePercent}% {isSw ? 'ya Mapato' : 'of Revenue'}
+              {isSw ? 'Bei uliyoilipia bidhaa zilizouzwa' : 'What you paid for sold products'} • {cogsSharePercent}% {isSw ? 'ya mauzo' : 'of sales'}
             </span>
           </div>
 
           <div className="bg-white/5 rounded-xl p-3.5 border border-white/10">
-            <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider block">Gross Margin</span>
+            <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider block">
+              {isSw ? 'Faida Kabla ya Matumizi' : 'Profit Before Bills'}
+            </span>
             <span className="text-lg font-black text-emerald-300 block mt-1">{formatTSh(grossProfit)}</span>
             <span className="text-[10px] text-emerald-400 font-bold block mt-0.5">{grossMarginPercent}% Margin</span>
           </div>
@@ -347,9 +351,13 @@ export const BIAnalyticsDashboard: React.FC<BIAnalyticsDashboardProps> = ({
           </div>
 
           <div className="bg-white/10 rounded-xl p-3.5 border border-emerald-400/30 ring-1 ring-emerald-400/20">
-            <span className="text-[11px] font-bold text-emerald-200 uppercase tracking-wider block">Net Clean Profit</span>
+            <span className="text-[11px] font-bold text-emerald-200 uppercase tracking-wider block">
+              {isSw ? 'Pesa Unayobaki' : 'Money You Keep'}
+            </span>
             <span className="text-xl font-black text-emerald-300 block mt-1">{formatTSh(netOperatingProfit)}</span>
-            <span className="text-[10px] text-emerald-300 font-bold block mt-0.5">{netProfitMarginPercent}% Net Margin</span>
+            <span className="text-[10px] text-emerald-300 font-bold block mt-0.5">
+              {isSw ? 'Baada ya kununua na matumizi' : 'After buying stock & paying bills'} • {netProfitMarginPercent}%
+            </span>
           </div>
 
           <div className="bg-white/5 rounded-xl p-3.5 border border-white/10">
@@ -460,7 +468,7 @@ export const BIAnalyticsDashboard: React.FC<BIAnalyticsDashboardProps> = ({
               {/* Quick Health Meter */}
               <div className="space-y-2">
                 <div className="flex justify-between text-xs font-bold">
-                  <span>{isSw ? 'Hali ya Faida Halisi' : 'Net Margin Health'}:</span>
+                  <span>{isSw ? 'Hali ya Pesa Unayobaki' : 'Money You Keep Health'}:</span>
                   <span className={
                     netProfitMarginPercent >= 20 ? 'text-emerald-700 font-extrabold'
                       : netProfitMarginPercent >= 5 ? 'text-amber-700 font-extrabold'
@@ -473,7 +481,7 @@ export const BIAnalyticsDashboard: React.FC<BIAnalyticsDashboardProps> = ({
                   <div
                     className="h-full bg-rose-400"
                     style={{ width: `${Math.min(100, cogsSharePercent)}%` }}
-                    title={`COGS: ${cogsSharePercent}%`}
+                    title={isSw ? `Gharama ya kununua: ${cogsSharePercent}%` : `Stock cost: ${cogsSharePercent}%`}
                   />
                   <div
                     className="h-full bg-amber-400"
@@ -483,13 +491,13 @@ export const BIAnalyticsDashboard: React.FC<BIAnalyticsDashboardProps> = ({
                   <div
                     className="h-full bg-emerald-500"
                     style={{ width: `${Math.max(0, Math.min(100 - cogsSharePercent - opexSharePercent, netProfitMarginPercent))}%` }}
-                    title={`Net Profit: ${netProfitMarginPercent}%`}
+                    title={isSw ? `Pesa unayobaki: ${netProfitMarginPercent}%` : `Money you keep: ${netProfitMarginPercent}%`}
                   />
                 </div>
                 <div className="flex items-center justify-between text-[10px] text-[#605E5C]">
-                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-400"></span> COGS ({cogsSharePercent}%)</span>
-                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400"></span> OPEX ({opexSharePercent}%)</span>
-                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500"></span> Net Profit ({netProfitMarginPercent}%)</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-400"></span> {isSw ? 'Kununua bidhaa' : 'Stock cost'} ({cogsSharePercent}%)</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400"></span> {isSw ? 'Matumizi' : 'Bills'} ({opexSharePercent}%)</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500"></span> {isSw ? 'Pesa unayobaki' : 'You keep'} ({netProfitMarginPercent}%)</span>
                 </div>
               </div>
             </div>
@@ -591,7 +599,7 @@ export const BIAnalyticsDashboard: React.FC<BIAnalyticsDashboardProps> = ({
                   </h3>
                 </div>
                 <p className="text-[11px] text-[#605E5C] mt-0.5">
-                  {isSw ? 'Ulinganisho wa Mapato ya Mauzo (Revenue), Manunuzi ya Bidhaa (COGS), Gharama za Uendeshaji (OPEX) na Faida Halisi (Net Profit)' : 'Trajectory comparing Revenue vs COGS vs Operational Expenses vs Clean Retained Profit'}
+                  {isSw ? 'Ulinganisho wa mauzo, gharama ya kununua bidhaa, matumizi ya duka na pesa unayobaki' : 'Sales vs stock cost vs shop bills vs money you keep'}
                 </p>
               </div>
               {ytdGrowth.hasData && (
@@ -633,7 +641,7 @@ export const BIAnalyticsDashboard: React.FC<BIAnalyticsDashboardProps> = ({
                                 <strong className="text-white">{formatTSh(data.revenue)}</strong>
                               </div>
                               <div className="flex justify-between gap-4 text-rose-300">
-                                <span>COGS (Bidhaa):</span>
+                                <span>{isSw ? 'Gharama ya kununua:' : 'Stock purchase cost:'}</span>
                                 <span>{formatTSh(data.cogs)}</span>
                               </div>
                               <div className="flex justify-between gap-4 text-amber-300">
@@ -641,7 +649,7 @@ export const BIAnalyticsDashboard: React.FC<BIAnalyticsDashboardProps> = ({
                                 <span>{formatTSh(data.opex)}</span>
                               </div>
                               <div className="flex justify-between gap-4 text-emerald-400 font-bold border-t border-white/10 pt-1">
-                                <span>Faida Halisi (Net Profit):</span>
+                                <span>{isSw ? 'Pesa unayobaki:' : 'Money you keep:'}</span>
                                 <span>{formatTSh(data.netProfit)}</span>
                               </div>
                             </div>
@@ -653,9 +661,9 @@ export const BIAnalyticsDashboard: React.FC<BIAnalyticsDashboardProps> = ({
                   />
                   <Legend verticalAlign="top" align="right" wrapperStyle={{ paddingBottom: '8px', fontSize: '11px', fontWeight: 'bold' }} />
                   <Area type="monotone" dataKey="revenue" name={isSw ? 'Mapato (Revenue)' : 'Revenue'} stroke="#6264A7" strokeWidth={2} fill="url(#biRevenueGrad)" />
-                  <Bar dataKey="cogs" name={isSw ? 'Gharama ya Bidhaa (COGS)' : 'COGS'} fill="#FDA4AF" radius={[4, 4, 0, 0]} maxBarSize={20} />
-                  <Bar dataKey="opex" name={isSw ? 'Uendeshaji & Posho (OPEX)' : 'OPEX'} fill="#FDE68A" radius={[4, 4, 0, 0]} maxBarSize={20} />
-                  <Line type="monotone" dataKey="netProfit" name={isSw ? 'Faida Halisi (Net Profit)' : 'Net Profit'} stroke="#107C10" strokeWidth={2.5} dot={{ r: 4, fill: '#107C10' }} />
+                  <Bar dataKey="cogs" name={isSw ? 'Gharama ya Kununua Bidhaa' : 'Stock Purchase Cost'} fill="#FDA4AF" radius={[4, 4, 0, 0]} maxBarSize={20} />
+                  <Bar dataKey="opex" name={isSw ? 'Matumizi ya Duka' : 'Shop Bills'} fill="#FDE68A" radius={[4, 4, 0, 0]} maxBarSize={20} />
+                  <Line type="monotone" dataKey="netProfit" name={isSw ? 'Pesa Unayobaki' : 'Money You Keep'} stroke="#107C10" strokeWidth={2.5} dot={{ r: 4, fill: '#107C10' }} />
                 </ComposedChart>
               </ResponsiveContainer>
             </div>

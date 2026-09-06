@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { resolveStaffPermissions } from '@/lib/apiSync';
+import { loadPayrollStore, savePayrollStore } from '@/lib/payrollStore';
 import type { AuthUser, Language, StaffMember, StaffPermissions, StaffRole } from '@/types/v1';
 
 interface StaffTeamPanelProps {
@@ -94,6 +95,7 @@ export const StaffTeamPanel: React.FC<StaffTeamPanelProps> = ({
     email: '',
     phone: '+255 7',
     password: '',
+    baseSalary: 450000,
     role: 'Cashier' as StaffRole,
     branch: 'HQ',
     shift: 'Morning',
@@ -136,6 +138,7 @@ export const StaffTeamPanel: React.FC<StaffTeamPanelProps> = ({
         role: (created.role as StaffMember['role']) ?? form.role,
         email: created.email as string,
         phone: (created.phone as string) ?? form.phone,
+        baseSalary: form.baseSalary,
         active: Boolean(created.active ?? true),
         joinedDate: new Date().toISOString().split('T')[0],
         branch: form.branch,
@@ -146,8 +149,20 @@ export const StaffTeamPanel: React.FC<StaffTeamPanelProps> = ({
         permissions: form.permissions,
       };
       setStaffList(prev => [member, ...prev]);
+      const tenantId = currentUser?.businessId || currentUser?.id || 'local';
+      const payroll = loadPayrollStore(tenantId);
+      savePayrollStore(tenantId, {
+        ...payroll,
+        staffConfig: {
+          ...payroll.staffConfig,
+          [member.id]: {
+            ...payroll.staffConfig[member.id],
+            baseSalary: form.baseSalary,
+          },
+        },
+      });
       setAddOpen(false);
-      setForm(prev => ({ ...prev, name: '', email: '', password: '' }));
+      setForm(prev => ({ ...prev, name: '', email: '', password: '', baseSalary: 450000 }));
       showToast(isSw ? `${member.name} amesajiliwa.` : `${member.name} added to team.`);
     } catch {
       showToast(isSw ? 'Imeshindikana kuongeza mfanyakazi.' : 'Failed to add staff member.');
@@ -165,6 +180,18 @@ export const StaffTeamPanel: React.FC<StaffTeamPanelProps> = ({
         active: editTarget.active,
       });
       setStaffList(prev => prev.map(s => (s.id === editTarget.id ? editTarget : s)));
+      const tenantId = currentUser?.businessId || currentUser?.id || 'local';
+      const payroll = loadPayrollStore(tenantId);
+      savePayrollStore(tenantId, {
+        ...payroll,
+        staffConfig: {
+          ...payroll.staffConfig,
+          [editTarget.id]: {
+            ...payroll.staffConfig[editTarget.id],
+            baseSalary: editTarget.baseSalary ?? payroll.staffConfig[editTarget.id]?.baseSalary ?? 450000,
+          },
+        },
+      });
       setEditTarget(null);
       showToast(isSw ? 'Taarifa zimesasishwa.' : 'Staff profile updated.');
     } catch {
@@ -385,6 +412,20 @@ export const StaffTeamPanel: React.FC<StaffTeamPanelProps> = ({
                 placeholder="+255..."
                 className="w-full px-3 py-2 border border-[#E1DFDD] rounded-lg"
               />
+              <div>
+                <label className="block text-[10px] font-bold text-[#605E5C] mb-1">
+                  {isSw ? 'Mshahara wa mwezi (TSh)' : 'Monthly base salary (TSh)'}
+                </label>
+                <input
+                  required
+                  type="number"
+                  min="0"
+                  value={form.baseSalary}
+                  onChange={e => setForm(prev => ({ ...prev, baseSalary: Number(e.target.value) || 0 }))}
+                  placeholder="450000"
+                  className="w-full px-3 py-2 border border-[#E1DFDD] rounded-lg font-mono"
+                />
+              </div>
               <div className="flex justify-end gap-2 pt-2">
                 <button type="button" onClick={() => setAddOpen(false)} className="px-3 py-2 rounded-lg border text-xs font-semibold">
                   {isSw ? 'Ghairi' : 'Cancel'}
@@ -423,6 +464,19 @@ export const StaffTeamPanel: React.FC<StaffTeamPanelProps> = ({
                 onChange={e => setEditTarget({ ...editTarget, phone: e.target.value })}
                 className="w-full px-3 py-2 border border-[#E1DFDD] rounded-lg"
               />
+              <div>
+                <label className="block text-[10px] font-bold text-[#605E5C] mb-1">
+                  {isSw ? 'Mshahara wa mwezi (TSh)' : 'Monthly base salary (TSh)'}
+                </label>
+                <input
+                  required
+                  type="number"
+                  min="0"
+                  value={editTarget.baseSalary ?? 450000}
+                  onChange={e => setEditTarget({ ...editTarget, baseSalary: Number(e.target.value) || 0 })}
+                  className="w-full px-3 py-2 border border-[#E1DFDD] rounded-lg font-mono"
+                />
+              </div>
               <div className="flex justify-end gap-2 pt-2">
                 <button type="button" onClick={() => setEditTarget(null)} className="px-3 py-2 rounded-lg border text-xs font-semibold">
                   {isSw ? 'Ghairi' : 'Cancel'}
