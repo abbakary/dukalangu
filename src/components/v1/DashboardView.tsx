@@ -1259,10 +1259,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   <span className="font-semibold text-[#323130]">{peakHours.summary}</span>
                 </div>
                 <button 
-                  onClick={() => onNavigate('staff-site')}
+                  onClick={() => onNavigate('expenses-payroll')}
                   className="text-xs text-[#0078D4] hover:underline font-bold"
                 >
-                  Panga Zamu za Wafanyakazi →
+                  {isSw ? 'Simamia Posho & Timu →' : 'Manage Stipends & Team →'}
                 </button>
               </div>
             </div>
@@ -1580,10 +1580,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 </button>
 
                 <button
-                  onClick={() => onNavigate('staff-site')}
+                  onClick={() => onNavigate('expenses-payroll')}
                   className="px-3.5 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold border border-white/20 transition-all cursor-pointer"
                 >
-                  Kituo cha Mhudumu →
+                  {isSw ? 'Fedha & Posho →' : 'Finance Hub →'}
                 </button>
               </div>
             </div>
@@ -1665,7 +1665,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 </button>
 
                 <button
-                  onClick={() => onNavigate('staff-site')}
+                  onClick={() => onNavigate('expenses-payroll')}
                   className="p-3.5 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-200 text-left transition-all group"
                 >
                   <Wallet className="w-5 h-5 text-amber-600 mb-1.5 group-hover:scale-110 transition-transform" />

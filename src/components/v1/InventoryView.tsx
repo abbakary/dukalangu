@@ -494,7 +494,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     const stockPayload = {
       product_id: prod.id,
       quantity: -qty,
-      movement_type: stockOutForm.reason === 'expired' ? 'out_expired' : 'out_adjustment',
+      movement_type: stockOutForm.reason === 'out_expiry' ? 'out_expired' : 'out_adjustment',
       notes: stockOutForm.notes,
     };
 
@@ -525,7 +525,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           productId: prod.id,
           productName: prod.name,
           sku: prod.sku,
-          type: stockOutForm.reason === 'expired' ? 'out_expired' : 'out_adjustment',
+          type: stockOutForm.reason === 'out_expiry' ? 'out_expired' : 'out_adjustment',
           quantity: -qty,
           previousStock: prod.stock,
           newStock: Math.max(0, prod.stock - qty),
@@ -566,7 +566,9 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   const potentialMarginPercent = totalRetailValuation > 0 ? Math.round((potentialGrossProfit / totalRetailValuation) * 100) : 0;
   const lowStockCount = products.filter(p => p.stock <= p.reorderPoint).length;
   const criticalStockCount = products.filter(p => p.stock <= 5).length;
-  const pendingOrders = purchaseOrders.filter(po => po.status === 'sent');
+  const pendingOrders = purchaseOrders.filter(
+    po => po.status === 'sent' || po.status === 'draft' || (po.status as string) === 'pending',
+  );
 
   return (
     <div className="space-y-6 pb-16">
@@ -616,15 +618,6 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           >
             <ArrowUpRight className="w-4 h-4 text-[#D13438]" />
             <span>{t('stockOut')}</span>
-          </button>
-
-          <button
-            id="btn-add-product-top"
-            onClick={openAddProductModal}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#6264A7] hover:bg-[#555793] text-white font-bold text-xs shadow-xs transition-all cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Add Product</span>
           </button>
         </div>
       </div>
@@ -698,14 +691,12 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       {/* ACTION BAR */}
       <ActionBar
         language={language}
-        onAdd={openAddProductModal}
         onAISuggest={() => {
           if (onOpenAIChatWithPrompt) {
             onOpenAIChatWithPrompt('Toa ripoti kamili ya uchambuzi wa bidhaa za stoo, utabiri wa mahitaji (Inventory Forecasting), na orodha ya bidhaa za kuagiza kwa wasambazaji.');
           }
         }}
         onExport={handleExportInventory}
-        customAddLabel="➕ Add Product"
         selectedCount={selectedProductId ? 1 : 0}
         totalCount={products.length}
       />

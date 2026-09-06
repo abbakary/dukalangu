@@ -145,7 +145,6 @@ export function canAccessVendorTab(user: AuthUser | null | undefined, tab: strin
       return isOwner || isManager || isAccountant || isCashier;
     },
     'pending-transactions': () => canAccessVendorTab(user, 'pos'),
-    'staff-site': () => canClaimOwnDailyStipend(user) || canSeeExpenses(user) || canAccessVendorTab(user, 'pos'),
   };
 
   const checker = map[tab];
@@ -158,10 +157,11 @@ export function receivablesInitialTab(activeTab: string): 'receivables' | 'payab
   return 'receivables';
 }
 
-export function expensesInitialTab(activeTab: string): 'expenses' | 'allowances' | 'payroll' | 'advances' {
+export function expensesInitialTab(activeTab: string): 'expenses' | 'allowances' | 'payroll' | 'advances' | 'team' {
   if (activeTab === 'payroll') return 'payroll';
   if (activeTab === 'allowances') return 'allowances';
   if (activeTab === 'advances') return 'advances';
+  if (activeTab === 'team' || activeTab === 'staff-site') return 'team';
   return 'expenses';
 }
 

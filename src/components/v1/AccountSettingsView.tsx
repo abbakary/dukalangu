@@ -97,7 +97,7 @@ export const AccountSettingsView: React.FC<AccountSettingsViewProps> = ({
   const activePlan = plans.find(p => p.tier === currentPlanTier) ?? plans[0];
   const paymentStatus = derivePaymentStatus(subscriptionExpiry, 'active');
   const canManageTeam = canManageStaffRBAC(currentUser);
-  const [activeTab, setActiveTab] = useState<'profile' | 'team' | 'branches' | 'compliance' | 'documents' | 'billing'>(canManageStaffRBAC(currentUser) ? 'team' : 'profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'team' | 'branches' | 'compliance' | 'documents' | 'billing'>('profile');
 
   // Internal or external staff list
   const [internalStaffList, setInternalStaffList] = useState<StaffMember[]>([]);
@@ -286,9 +286,7 @@ export const AccountSettingsView: React.FC<AccountSettingsViewProps> = ({
   const handleInstantSwitchStaff = (staff: StaffMember) => {
     if (!canManageTeam) return;
     setOpenDropdownStaffId(null);
-    if (onSwitchToStaffSite) {
-      onSwitchToStaffSite(staff);
-    }
+    onNavigate?.('expenses-payroll');
   };
 
   useEffect(() => {
@@ -353,7 +351,7 @@ export const AccountSettingsView: React.FC<AccountSettingsViewProps> = ({
           { id: 'compliance', label: isSw ? 'Kodi za TRA & EFD' : 'TRA EFD & Compliance', icon: <ShieldCheck className="w-4 h-4" /> },
           { id: 'billing', label: isSw ? 'Usajili & Malipo' : 'Plan & Billing', icon: <CreditCard className="w-4 h-4" /> },
           { id: 'documents', label: isSw ? 'Violezo vya Hati' : 'Document Templates', icon: <FileText className="w-4 h-4" /> },
-        ].filter(tab => !tab.managerOnly || canManageTeam).map((tab) => (
+        ].filter(tab => tab.id !== 'team' && (!tab.managerOnly || canManageTeam)).map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id as any)}

@@ -2,11 +2,9 @@ import React, { useMemo, useState } from 'react';
 import {
   LayoutDashboard,
   ShoppingCart,
-  Package,
   Warehouse,
-  ClipboardList,
-  Truck,
   FileSignature,
+  Truck,
   FileText,
   Users,
   Wallet,
@@ -16,7 +14,6 @@ import {
   GitBranch,
   Clock,
   CalendarDays,
-  Building2,
   Settings,
   LogOut,
   ChevronDown,
@@ -29,7 +26,6 @@ import {
 import { BusinessType, Language, UserRole, AuthUser, StaffRole } from '@/types/v1';
 import { getTranslation } from '@/utils/translations';
 import { getWorkplace } from '@/lib/businessProfiles';
-import { canClaimOwnDailyStipend } from '@/lib/rbac';
 import { BrandLogo } from '@/components/ui/BrandLogo';
 
 interface SidebarProps {
@@ -135,8 +131,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     () => [
       {
         id: 'dashboard',
-        labelEn: 'Dashboard',
-        labelSw: 'Dashibodi',
+        labelEn: 'Home',
+        labelSw: 'Nyumbani',
         icon: LayoutDashboard,
         activeWhen: v => v === 'dashboard',
         visible: canSeeDashboard,
@@ -144,19 +140,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       },
       {
         id: 'pos',
-        labelEn: 'Sales',
+        labelEn: 'POS',
         labelSw: 'Mauzo',
         icon: ShoppingCart,
         activeWhen: v => v === 'pos',
         visible: canSeePOS,
-      },
-      {
-        id: 'inventory',
-        labelEn: 'Products',
-        labelSw: 'Bidhaa',
-        icon: Package,
-        activeWhen: v => v === 'inventory',
-        visible: canSeeInventory,
       },
       {
         id: 'inventory',
@@ -165,40 +153,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
         icon: Warehouse,
         activeWhen: v => v === 'inventory',
         visible: canSeeInventory,
-        badge: lowStockCount > 0 ? `${lowStockCount} low` : undefined,
+        badge: lowStockCount > 0 ? lowStockCount : undefined,
       },
       {
         id: 'suppliers',
-        labelEn: 'Purchases',
+        labelEn: 'Supply',
         labelSw: 'Manunuzi',
-        icon: ClipboardList,
-        activeWhen: v => v === 'suppliers',
-        visible: canSeeSuppliers,
-      },
-      {
-        id: 'suppliers',
-        labelEn: 'Suppliers',
-        labelSw: 'Wasambazaji',
         icon: Truck,
         activeWhen: v => v === 'suppliers',
         visible: canSeeSuppliers,
       },
       {
-        id: 'reports',
-        labelEn: 'Quotations',
-        labelSw: 'Nukuu Bei',
-        icon: FileSignature,
-        activeWhen: v => v === 'reports' || v === 'analytics',
-        visible: canSeeReports,
-      },
-      {
         id: 'customers',
-        labelEn: 'Customers',
+        labelEn: 'Clients',
         labelSw: 'Wateja',
         icon: Users,
         activeWhen: v => v === 'customers',
         visible: canSeeCustomers,
-        badge: customersCount > 0 ? customersCount : undefined,
       },
       {
         id: 'receivables-payables',
@@ -215,11 +186,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       },
       {
         id: 'expenses-payroll',
-        labelEn: 'Expenses',
-        labelSw: 'Matumizi',
+        labelEn: 'Finance',
+        labelSw: 'Fedha',
         icon: Receipt,
         activeWhen: v =>
-          v === 'expenses-payroll' || v === 'expenses' || v === 'payroll',
+          v === 'expenses-payroll' || v === 'expenses' || v === 'payroll' || v === 'team',
         visible: canSeeExpenses,
       },
     ],
@@ -228,18 +199,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
       canSeePOS,
       canSeeInventory,
       canSeeSuppliers,
-      canSeeReports,
       canSeeCustomers,
       canSeeReceivables,
       canSeeExpenses,
       lowStockCount,
-      customersCount,
       overdueCreditCount,
     ],
   );
 
   const moreNav: NavItemDef[] = useMemo(
     () => [
+      {
+        id: 'reports',
+        labelEn: 'Quotes',
+        labelSw: 'Nukuu Bei',
+        icon: FileSignature,
+        activeWhen: v => v === 'reports' || v === 'analytics',
+        visible: canSeeReports,
+      },
       {
         id: 'transaction-history',
         labelEn: 'Sales & Documents',
@@ -306,14 +283,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
         visible: canSeeCalendar,
         badge: upcomingEventsCount > 0 ? upcomingEventsCount : undefined,
       },
-      {
-        id: 'staff-site',
-        labelEn: 'Staff Station',
-        labelSw: 'Kituo cha Mhudumu',
-        icon: Building2,
-        activeWhen: v => v === 'staff-site',
-        visible: canClaimOwnDailyStipend(currentUser) || canSeeExpenses || canSeePOS,
-      },
       ...workplace.nav_extra.map(extra => ({
         id: `workplace-${extra.id}`,
         labelEn: extra.label_en,
@@ -351,22 +320,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
         id={`nav-${item.id}-${item.labelEn.toLowerCase().replace(/\s+/g, '-')}`}
         type="button"
         onClick={() => handleSetView(item.id)}
-        className={`group relative w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all duration-150 cursor-pointer ${
+        className={`group relative w-full flex items-center gap-2.5 px-2.5 py-2 rounded-md text-left transition-all duration-150 cursor-pointer ${
           active
             ? 'bg-white/[0.08] text-white'
             : 'text-slate-300 hover:bg-white/[0.05] hover:text-white'
         }`}
       >
         {active && (
-          <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-6 rounded-r-full bg-[#f97316]" />
+          <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[2px] h-5 rounded-r-full bg-[#f97316]" />
         )}
         <Icon
-          className={`w-[1.125rem] h-[1.125rem] shrink-0 ${
+          className={`w-4 h-4 shrink-0 ${
             active ? 'text-[#f97316]' : 'text-slate-400 group-hover:text-slate-200'
           }`}
           strokeWidth={active ? 2.25 : 1.75}
         />
-        <span className={`flex-1 text-[0.9375rem] truncate ${active ? 'font-semibold' : 'font-medium'}`}>
+        <span className={`flex-1 text-sm truncate ${active ? 'font-semibold' : 'font-medium'}`}>
           {label}
         </span>
         {item.badge !== undefined && item.badge !== 0 && (
@@ -381,7 +350,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <aside
       id="duka-sidebar"
-      className="w-[15.5rem] min-w-[15.5rem] h-full flex flex-col bg-[#1a2832] text-white select-none border-r border-[#243844]"
+      className="w-[12.5rem] min-w-[12.5rem] h-full flex flex-col bg-[#1a2832] text-white select-none border-r border-[#243844]"
     >
       {/* Brand */}
       <div className="px-4 pt-5 pb-4">
@@ -423,7 +392,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 moreActive ? 'text-[#f97316]' : 'text-slate-500 hover:text-slate-300'
               }`}
             >
-              <span>{isSw ? 'Zaidi' : 'More tools'}</span>
+              <span>{isSw ? 'Zaidi' : 'More'}</span>
               <ChevronDown className={`w-3.5 h-3.5 transition-transform ${moreOpen ? 'rotate-180' : ''}`} />
             </button>
             {(moreOpen || moreActive) && (

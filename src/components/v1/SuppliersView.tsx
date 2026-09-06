@@ -240,6 +240,23 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
     setTimeout(() => setSuccessToast(null), 6000);
   };
 
+  const handleCancelPO = async (targetPO: PurchaseOrder) => {
+    if (targetPO.status === 'received' || targetPO.status === 'cancelled') return;
+    const ok = window.confirm(
+      isSw
+        ? `Kataa agizo ${targetPO.poNumber}? Stoo haitaongezwa.`
+        : `Reject order ${targetPO.poNumber}? Stock will NOT be added to inventory.`,
+    );
+    if (!ok) return;
+    try {
+      await api.cancelPurchaseOrder(targetPO.id);
+      setPurchaseOrders(prev => prev.map(po => po.id === targetPO.id ? { ...po, status: 'cancelled' as const } : po));
+      triggerToast(isSw ? 'Agizo limefutwa' : 'Order cancelled', targetPO.supplierName);
+    } catch (err) {
+      alert((err as Error).message);
+    }
+  };
+
   // 1-CLICK RECEIVE & STOCK-IN HANDLER
   // Automatically creates new products, updates existing product stock and cost, logs stock movements,
   // updates supplier accounts payable, updates calendar events, and marks PO as received.
@@ -841,8 +858,8 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
                     </tr>
                   ) : (
                     filteredPOs.map(po => {
-                      const isPending = po.status === 'sent';
-                      const isReceived = po.status === 'received';
+                      const isPending = po.status === 'sent' || po.status === 'draft' || (po.status as string) === 'pending';
+                      const isReceived = po.status === 'received' || po.status === 'partially_received';
 
                       return (
                         <tr 
@@ -900,6 +917,7 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
                             <div className="flex items-center justify-end gap-2">
                               {/* 1-CLICK RECEIVE & STOCK-IN BUTTON */}
                               {isPending && (
+                                <>
                                 <button
                                   id={`btn-receive-po-${po.id}`}
                                   onClick={() => handleExecuteReceivePO(po)}
@@ -909,6 +927,14 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
                                   <PackagePlus className="w-3.5 h-3.5" />
                                   <span>Receive & Stock In</span>
                                 </button>
+                                <button
+                                  onClick={() => handleCancelPO(po)}
+                                  className="px-3 py-1.5 rounded-lg bg-white hover:bg-rose-50 text-rose-700 font-bold text-xs border border-rose-200 transition-all cursor-pointer"
+                                  title="Reject order — no stock added"
+                                >
+                                  Reject
+                                </button>
+                                </>
                               )}
 
                               <button

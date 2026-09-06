@@ -539,7 +539,7 @@ export default function DukaPortal() {
       });
       setUserRole(staff.role === 'Owner' ? 'vendor_owner' : 'vendor_staff');
     }
-    setActiveTab('staff-site');
+    setActiveTab('expenses-payroll');
     confetti({
       particleCount: 35,
       spread: 55,
@@ -981,12 +981,20 @@ export default function DukaPortal() {
       const updatedProducts = [...prev];
 
       targetPO.items.forEach(poItem => {
-        let existingIndex = updatedProducts.findIndex(p => p.id === poItem.productId || p.sku === poItem.sku);
+        const itemQty = Number(poItem.quantity);
+        const itemCost = Number(poItem.costPrice ?? poItem.unitCost ?? 0);
+        const itemTotal = Number(poItem.total ?? poItem.totalCost ?? itemQty * itemCost);
+        const poRef = targetPO.poNumber || targetPO.orderNumber || targetPO.id;
+
+        let existingIndex = updatedProducts.findIndex(p => p.id === poItem.productId || (poItem.sku && p.sku === poItem.sku));
 
         if (existingIndex >= 0) {
           const prod = updatedProducts[existingIndex];
           const prevStock = prod.stock;
-          const newStock = prevStock + poItem.quantity;
+          const newStock = prevStock + itemQty;
+          const updatedCost = newStock > 0
+            ? Math.round(((prevStock * prod.cost) + (itemQty * itemCost)) / newStock)
+            : (itemCost > 0 ? itemCost : prod.cost);
 
           newMovements.push({
             id: `sm-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
@@ -995,30 +1003,29 @@ export default function DukaPortal() {
             productName: prod.name,
             sku: prod.sku,
             type: 'in_purchase',
-            quantity: poItem.quantity,
+            quantity: itemQty,
             previousStock: prevStock,
             newStock: newStock,
-            unitCost: poItem.unitCost,
-            totalValuation: poItem.totalCost,
+            unitCost: itemCost,
+            totalValuation: itemTotal,
             batchNumber: poItem.batchNumber || prod.batchNumber,
             expiryDate: poItem.expiryDate || prod.expiryDate,
-            referenceId: targetPO.orderNumber,
+            referenceId: poRef,
             referenceType: 'PURCHASE_ORDER',
-            operatorName: currentUser?.name || 'Salum Omar (Manager)',
-            notes: `Received PO ${targetPO.orderNumber} from ${targetPO.supplierName}`,
+            operatorName: currentUser?.name || 'Manager',
+            notes: `Received PO ${poRef} from ${targetPO.supplierName}`,
           });
 
           updatedProducts[existingIndex] = {
             ...prod,
             stock: newStock,
-            cost: poItem.unitCost > 0 ? poItem.unitCost : prod.cost,
+            cost: updatedCost > 0 ? updatedCost : prod.cost,
             batchNumber: poItem.batchNumber || prod.batchNumber,
             expiryDate: poItem.expiryDate || prod.expiryDate,
           };
         } else {
-          // If completely new product from supplier catalog, auto-create in inventory
           const newProdId = poItem.productId || `prod-${Date.now()}-${Math.floor(Math.random()*1000)}`;
-          const defaultPrice = Math.round(poItem.unitCost * 1.35); // 35% margin default
+          const defaultPrice = Math.round(itemCost * 1.35);
 
           newMovements.push({
             id: `sm-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
@@ -1027,17 +1034,17 @@ export default function DukaPortal() {
             productName: poItem.productName,
             sku: poItem.sku,
             type: 'in_purchase',
-            quantity: poItem.quantity,
+            quantity: itemQty,
             previousStock: 0,
-            newStock: poItem.quantity,
-            unitCost: poItem.unitCost,
-            totalValuation: poItem.totalCost,
+            newStock: itemQty,
+            unitCost: itemCost,
+            totalValuation: itemTotal,
             batchNumber: poItem.batchNumber,
             expiryDate: poItem.expiryDate,
-            referenceId: targetPO.orderNumber,
+            referenceId: poRef,
             referenceType: 'PURCHASE_ORDER',
-            operatorName: currentUser?.name || 'Salum Omar (Manager)',
-            notes: `New item provisioned from PO ${targetPO.orderNumber}`,
+            operatorName: currentUser?.name || 'Manager',
+            notes: `New item provisioned from PO ${poRef}`,
           });
 
           updatedProducts.unshift({
@@ -1045,17 +1052,17 @@ export default function DukaPortal() {
             name: poItem.productName,
             category: poItem.category || getDefaultMainCategory(businessType, language === 'sw' ? 'sw' : 'en'),
             sku: poItem.sku,
-            price: defaultPrice,
-            cost: poItem.unitCost,
-            stock: poItem.quantity,
-            reorderPoint: Math.max(10, Math.round(poItem.quantity * 0.2)),
+            price: poItem.sellingPrice && poItem.sellingPrice > 0 ? poItem.sellingPrice : defaultPrice,
+            cost: itemCost,
+            stock: itemQty,
+            reorderPoint: Math.max(10, Math.round(itemQty * 0.2)),
             unit: poItem.unit || getDefaultUnit(businessType),
             supplier: targetPO.supplierName,
             batchNumber: poItem.batchNumber,
             expiryDate: poItem.expiryDate,
             vatType: 'standard',
             businessType: businessType,
-            description: `Auto-created from received PO ${targetPO.orderNumber}`,
+            description: `Auto-created from received PO ${poRef}`,
             location: 'Warehouse Receiving Bay A',
             isDrug: businessType === 'pharmacy',
             ...(poItem.metadata ?? {}),
@@ -1076,8 +1083,8 @@ export default function DukaPortal() {
       if (sup.id === targetPO.supplierId || sup.name === targetPO.supplierName) {
         return {
           ...sup,
-          balance: sup.balance + targetPO.totalCost,
-          totalPurchases: sup.totalPurchases + targetPO.totalCost,
+          balance: sup.balance + targetPO.totalAmount,
+          totalPurchases: sup.totalPurchases + targetPO.totalAmount,
         };
       }
       return sup;
@@ -1090,19 +1097,19 @@ export default function DukaPortal() {
         supplierId: targetPO.supplierId,
         supplierName: targetPO.supplierName,
         poId: targetPO.id,
-        orderNumber: targetPO.orderNumber,
-        amount: targetPO.totalCost,
+        orderNumber: targetPO.poNumber || targetPO.orderNumber || targetPO.id,
+        amount: targetPO.totalAmount ?? targetPO.totalCost ?? 0,
         type: 'bill_created',
         paymentMethod: 'Bank Transfer (CRDB)',
         status: 'pending',
-        notes: `Automated bill for received PO ${targetPO.orderNumber}`,
+        notes: `Automated bill for received PO ${targetPO.poNumber || targetPO.orderNumber || targetPO.id}`,
       },
       ...prev
     ]);
 
     // 5. Automatically update or complete associated Calendar Event
     setEvents(prev => prev.map(ev => {
-      if (ev.orderId === targetPO.id || (ev.title.includes(targetPO.orderNumber))) {
+      if (ev.orderId === targetPO.id || (ev.title.includes(targetPO.poNumber || targetPO.orderNumber || ''))) {
         return {
           ...ev,
           completed: true,
@@ -1598,7 +1605,7 @@ export default function DukaPortal() {
                   />
                 )}
 
-                {(activeTab === 'expenses-payroll' || activeTab === 'expenses' || activeTab === 'payroll') && (
+                {(activeTab === 'expenses-payroll' || activeTab === 'expenses' || activeTab === 'payroll' || activeTab === 'team' || activeTab === 'staff-site') && (
                   <Suspense fallback={<TabLoading />}>
                   <ExpensesPayrollView
                     language={language}
@@ -1628,28 +1635,6 @@ export default function DukaPortal() {
                   </Suspense>
                 )}
 
-                {activeTab === 'staff-site' && (
-                  <Suspense fallback={<TabLoading />}>
-                  <StaffRoleSiteView
-                    language={language}
-                    currentUser={currentUser}
-                    staffMember={activeStaffMember}
-                    staffList={staffList}
-                    branches={branches}
-                    customers={customers}
-                    products={products}
-                    sales={sales}
-                    purchaseOrders={purchaseOrders}
-                    stockMovements={stockMovements}
-                    suppliers={suppliers}
-                    tenantStorageId={tenantStorageId}
-                    onNavigate={setActiveTab}
-                    onOpenAIChatWithPrompt={handleOpenAIChatWithPrompt}
-                    onQuickSale={() => setActiveTab('pos')}
-                    onSwitchStaff={canSwitchStaffWorkstation(currentUser) ? handleSwitchToStaffSite : undefined}
-                  />
-                  </Suspense>
-                )}
 
                 {activeTab === 'pos' && (
                   <POSView

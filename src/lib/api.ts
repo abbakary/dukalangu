@@ -262,6 +262,12 @@ class ApiClient {
   receivePurchaseOrder(id: string, notes?: string) {
     return this.request(`/purchase-orders/${id}/receive`, { method: 'POST', body: JSON.stringify({ notes }) });
   }
+  cancelPurchaseOrder(id: string, reason?: string) {
+    return this.request(`/purchase-orders/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status: 'cancelled', ...(reason ? { notes: reason } : {}) }),
+    });
+  }
 
   // Workplace (tables, KOT, appointments) — branch-scoped per spec Part 4B / Part 7
   getWorkplaceState(branchId?: string) {

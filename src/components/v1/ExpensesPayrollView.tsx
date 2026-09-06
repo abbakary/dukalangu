@@ -41,7 +41,8 @@ import {
 import { formatTSh, getTranslation } from '@/utils/translations';
 import { api } from '@/lib/api';
 import { mapExpense, expenseToApiPayload } from '@/lib/apiSync';
-import { canManageExpenses, canManagePayroll, canConfigureAllowances, canApproveAdvances, canViewPayrollHub } from '@/lib/rbac';
+import { canManageExpenses, canManagePayroll, canConfigureAllowances, canApproveAdvances, canViewPayrollHub, canManageStaffRBAC } from '@/lib/rbac';
+import { StaffTeamPanel } from '@/components/v1/StaffTeamPanel';
 import {
   loadPayrollStore,
   savePayrollStore,
@@ -59,9 +60,10 @@ interface ExpensesPayrollViewProps {
   expenses?: ExpenseItem[];
   setExpenses?: React.Dispatch<React.SetStateAction<ExpenseItem[]>>;
   onUpdateStaffMember?: (staff: StaffMember) => void;
+  setStaffList?: React.Dispatch<React.SetStateAction<StaffMember[]>>;
   currentUser?: AuthUser | null;
   onOpenAIChatWithPrompt?: (prompt: string) => void;
-  initialTab?: 'expenses' | 'allowances' | 'payroll' | 'advances';
+  initialTab?: 'expenses' | 'allowances' | 'payroll' | 'advances' | 'team';
   tenantStorageId?: string;
 }
 
@@ -71,6 +73,7 @@ export const ExpensesPayrollView: React.FC<ExpensesPayrollViewProps> = ({
   expenses: expensesProp = [],
   setExpenses: setExpensesProp,
   onUpdateStaffMember,
+  setStaffList,
   currentUser,
   initialTab = 'expenses',
   tenantStorageId,
@@ -81,12 +84,13 @@ export const ExpensesPayrollView: React.FC<ExpensesPayrollViewProps> = ({
   const canPayroll = canManagePayroll(currentUser);
   const canConfigAllowances = canConfigureAllowances(currentUser);
   const canAdvances = canApproveAdvances(currentUser);
+  const canTeam = canManageStaffRBAC(currentUser);
   const canView = canViewPayrollHub(currentUser);
   const tenantId = tenantStorageId || currentUser?.businessId || currentUser?.id || 'local';
   const todayStr = todayDateStr();
 
   // Active Sub-Tab
-  const [activeTab, setActiveTab] = useState<'expenses' | 'allowances' | 'payroll' | 'advances'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'expenses' | 'allowances' | 'payroll' | 'advances' | 'team'>(initialTab);
 
   useEffect(() => {
     setActiveTab(initialTab);
@@ -515,67 +519,39 @@ export const ExpensesPayrollView: React.FC<ExpensesPayrollViewProps> = ({
       </div>
 
       {/* Navigation Sub-Tabs */}
-      <div className="flex items-center gap-2 p-1.5 bg-white rounded-xl border border-[#E1DFDD] shadow-xs overflow-x-auto">
-        <button
-          onClick={() => setActiveTab('expenses')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-            activeTab === 'expenses'
-              ? 'bg-[#6264A7] text-white shadow-xs'
-              : 'text-[#605E5C] hover:bg-[#F3F2F1] hover:text-[#323130]'
-          }`}
-        >
-          <Receipt className="w-4 h-4" />
-          <span>{isSw ? '1. Daftari la Matumizi (OPEX Ledger)' : '1. Operating Expenses Ledger'}</span>
-          <span className="ml-1 px-2 py-0.2 rounded-full text-[10px] bg-white/20 font-mono">{expenses.length}</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('allowances')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-            activeTab === 'allowances'
-              ? 'bg-[#6264A7] text-white shadow-xs'
-              : 'text-[#605E5C] hover:bg-[#F3F2F1] hover:text-[#323130]'
-          }`}
-        >
-          <Coffee className="w-4 h-4" />
-          <span>{isSw ? '2. Posho za Kila Siku (Chakula & Nauli)' : '2. Daily Staff Stipends'}</span>
-          {unclaimedStipendCount > 0 ? (
-            <span className="ml-1 px-2 py-0.2 rounded-full text-[10px] bg-amber-500 text-white font-bold animate-pulse">
-              {unclaimedStipendCount} {isSw ? 'bila' : 'pending'}
-            </span>
-          ) : (
-            <span className="ml-1 px-2 py-0.2 rounded-full text-[10px] bg-emerald-100 text-emerald-800 font-mono">Leo</span>
-          )}
-        </button>
-
-        <button
-          onClick={() => setActiveTab('payroll')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-            activeTab === 'payroll'
-              ? 'bg-[#6264A7] text-white shadow-xs'
-              : 'text-[#605E5C] hover:bg-[#F3F2F1] hover:text-[#323130]'
-          }`}
-        >
-          <Wallet className="w-4 h-4" />
-          <span>{isSw ? '3. Mishahara ya Mwezi (Payroll Matrix)' : '3. Staff Monthly Payroll'}</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('advances')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-            activeTab === 'advances'
-              ? 'bg-[#6264A7] text-white shadow-xs'
-              : 'text-[#605E5C] hover:bg-[#F3F2F1] hover:text-[#323130]'
-          }`}
-        >
-          <DollarSign className="w-4 h-4" />
-          <span>{isSw ? '4. Maombi ya Advance (Advance Requests)' : '4. Salary Advances'}</span>
-          {pendingAdvancesCount > 0 && (
-            <span className="ml-1 px-2 py-0.2 rounded-full text-[10px] bg-amber-500 text-white font-bold animate-pulse">
-              {pendingAdvancesCount}
-            </span>
-          )}
-        </button>
+      <div className="flex items-center gap-1.5 p-1 bg-[#F3F2F1] rounded-xl border border-[#E1DFDD] overflow-x-auto">
+        {([
+          { id: 'expenses' as const, icon: Receipt, label: isSw ? 'Matumizi' : 'Expenses', badge: expenses.length },
+          { id: 'allowances' as const, icon: Coffee, label: isSw ? 'Posho' : 'Stipends', badge: unclaimedStipendCount > 0 ? unclaimedStipendCount : undefined, pulse: unclaimedStipendCount > 0 },
+          { id: 'payroll' as const, icon: Wallet, label: isSw ? 'Mishahara' : 'Payroll' },
+          { id: 'advances' as const, icon: DollarSign, label: isSw ? 'Advance' : 'Advances', badge: pendingAdvancesCount > 0 ? pendingAdvancesCount : undefined, pulse: pendingAdvancesCount > 0 },
+          ...(canTeam ? [{ id: 'team' as const, icon: Users, label: isSw ? 'Timu' : 'Team', badge: staffList.length }] : []),
+        ]).map(tab => {
+          const Icon = tab.icon;
+          const active = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-semibold transition-all cursor-pointer whitespace-nowrap ${
+                active
+                  ? 'bg-white text-[#323130] shadow-sm ring-1 ring-[#E1DFDD]'
+                  : 'text-[#605E5C] hover:bg-white/70 hover:text-[#323130]'
+              }`}
+            >
+              <Icon className={`w-3.5 h-3.5 ${active ? 'text-[#6264A7]' : ''}`} />
+              <span>{tab.label}</span>
+              {tab.badge !== undefined && tab.badge !== 0 && (
+                <span className={`ml-0.5 min-w-[1.125rem] px-1.5 py-0.5 rounded-full text-[9px] font-bold ${
+                  tab.pulse ? 'bg-amber-500 text-white' : 'bg-[#6264A7]/10 text-[#6264A7]'
+                }`}>
+                  {tab.badge}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* TAB 1: OPERATING EXPENSES LEDGER */}
@@ -1096,6 +1072,17 @@ export const ExpensesPayrollView: React.FC<ExpensesPayrollViewProps> = ({
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {activeTab === 'team' && canTeam && setStaffList && (
+        <div className="bg-white rounded-2xl border border-[#E1DFDD] shadow-xs p-5">
+          <StaffTeamPanel
+            language={language}
+            staffList={staffList}
+            setStaffList={setStaffList}
+            currentUser={currentUser}
+          />
         </div>
       )}
 
