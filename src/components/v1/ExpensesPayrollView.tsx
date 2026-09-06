@@ -86,6 +86,7 @@ export const ExpensesPayrollView: React.FC<ExpensesPayrollViewProps> = ({
   const canAdvances = canApproveAdvances(currentUser);
   const canTeam = canManageStaffRBAC(currentUser);
   const canView = canViewPayrollHub(currentUser);
+  const isOwnerAdmin = canPayroll || canTeam;
   const tenantId = tenantStorageId || currentUser?.businessId || currentUser?.id || 'local';
   const todayStr = todayDateStr();
 
@@ -159,8 +160,14 @@ export const ExpensesPayrollView: React.FC<ExpensesPayrollViewProps> = ({
   const [isAddExpenseOpen, setIsAddExpenseOpen] = useState(false);
   const [isConfigAllowancesOpen, setIsConfigAllowancesOpen] = useState(false);
   const [isPaySalaryModalOpen, setIsPaySalaryModalOpen] = useState(false);
+  const [isRecordAdvanceOpen, setIsRecordAdvanceOpen] = useState(false);
   const [selectedStaffForPay, setSelectedStaffForPay] = useState<StaffMember | null>(null);
   const [selectedPayslip, setSelectedPayslip] = useState<SalaryPayrollRecord | null>(null);
+  const [advanceStaffId, setAdvanceStaffId] = useState('');
+  const [advanceAmount, setAdvanceAmount] = useState<number | ''>('');
+  const [advanceReason, setAdvanceReason] = useState('');
+  const [editingBaseSalaryStaffId, setEditingBaseSalaryStaffId] = useState<string | null>(null);
+  const [editBaseSalaryAmount, setEditBaseSalaryAmount] = useState<number>(450000);
 
   // New Expense Form State
   const [newExpenseTitle, setNewExpenseTitle] = useState('');
@@ -237,6 +244,18 @@ export const ExpensesPayrollView: React.FC<ExpensesPayrollViewProps> = ({
   const pendingAdvancesCount = useMemo(() => {
     return advances.filter(a => a.status === 'pending').length;
   }, [advances]);
+
+  const monthOptions = useMemo(() => {
+    const opts: { value: string; label: string }[] = [];
+    const now = new Date();
+    for (let i = 0; i < 12; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const label = d.toLocaleDateString(isSw ? 'sw-TZ' : 'en-GB', { month: 'long', year: 'numeric' });
+      opts.push({ value, label });
+    }
+    return opts;
+  }, [isSw]);
 
   // Handle Add Expense
   const handleAddExpense = async (e: React.FormEvent) => {
@@ -316,6 +335,63 @@ export const ExpensesPayrollView: React.FC<ExpensesPayrollViewProps> = ({
       }
       return a;
     }));
+  };
+
+  const handleConfirmAllStipends = async () => {
+    if (!canConfigAllowances) return;
+    const unclaimed = staffList.filter(s => {
+      if (!s.active) return false;
+      return !dailyAllowances.some(a => a.staffId === s.id && a.date === todayStr && a.status === 'claimed');
+    });
+    for (const staff of unclaimed) {
+      await handleMarkAllowanceClaimed(staff);
+    }
+  };
+
+  const handleRecordAdvance = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canAdvances) return;
+    const staff = staffList.find(s => s.id === advanceStaffId);
+    if (!staff || !advanceAmount || Number(advanceAmount) <= 0) return;
+    const request: SalaryAdvanceRequest = {
+      id: `adv-${staff.id}-${Date.now()}`,
+      dateRequested: todayStr,
+      staffId: staff.id,
+      staffName: staff.name,
+      staffRole: staff.role,
+      requestedAmount: Number(advanceAmount),
+      reason: advanceReason.trim() || (isSw ? 'Advance ya dharura' : 'Emergency advance'),
+      status: 'pending',
+    };
+    setAdvances(prev => [request, ...prev]);
+    setIsRecordAdvanceOpen(false);
+    setAdvanceStaffId('');
+    setAdvanceAmount('');
+    setAdvanceReason('');
+  };
+
+  const handleSaveBaseSalary = (staffId: string) => {
+    if (!canPayroll) return;
+    setStaffConfig(prev => ({
+      ...prev,
+      [staffId]: {
+        ...prev[staffId],
+        baseSalary: editBaseSalaryAmount,
+      },
+    }));
+    const staff = staffList.find(s => s.id === staffId);
+    if (staff && onUpdateStaffMember) {
+      onUpdateStaffMember({ ...staff, baseSalary: editBaseSalaryAmount });
+    }
+    setEditingBaseSalaryStaffId(null);
+  };
+
+  const openRecordAdvanceModal = () => {
+    if (!canAdvances) return;
+    setAdvanceStaffId(staffList[0]?.id ?? '');
+    setAdvanceAmount('');
+    setAdvanceReason('');
+    setIsRecordAdvanceOpen(true);
   };
 
   const getStaffRates = (staff: StaffMember) => {
@@ -472,7 +548,7 @@ export const ExpensesPayrollView: React.FC<ExpensesPayrollViewProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            {canManage ? (
+            {activeTab === 'expenses' && canManage ? (
               <button
                 onClick={() => setIsAddExpenseOpen(true)}
                 className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-rose-500 to-rose-600 hover:from-rose-600 hover:to-rose-700 text-white text-xs font-black shadow-md cursor-pointer transition-all"
@@ -480,11 +556,35 @@ export const ExpensesPayrollView: React.FC<ExpensesPayrollViewProps> = ({
                 <Plus className="w-4 h-4" />
                 <span>{isSw ? '+ Rekodi Matumizi Mapya' : '+ Log New Expense'}</span>
               </button>
-            ) : (
+            ) : activeTab === 'allowances' && canConfigAllowances ? (
+              <button
+                onClick={() => void handleConfirmAllStipends()}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white text-xs font-black shadow-md cursor-pointer transition-all"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                <span>{isSw ? 'Thibitisha Posho Zote' : 'Confirm All Stipends'}</span>
+              </button>
+            ) : activeTab === 'advances' && canAdvances ? (
+              <button
+                onClick={openRecordAdvanceModal}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white text-xs font-black shadow-md cursor-pointer transition-all"
+              >
+                <Plus className="w-4 h-4" />
+                <span>{isSw ? '+ Rekodi Advance' : '+ Record Advance'}</span>
+              </button>
+            ) : activeTab === 'team' && canTeam ? (
+              <span className="text-xs text-slate-300 font-medium px-3 py-2 rounded-lg bg-white/10 border border-white/20">
+                {isSw ? 'Ongeza, hariri na simamia ruhusa za wafanyakazi hapa chini' : 'Add, edit and manage staff permissions below'}
+              </span>
+            ) : !canManage && activeTab === 'expenses' ? (
               <span className="text-xs text-slate-300 font-medium px-3 py-2 rounded-lg bg-white/10 border border-white/20">
                 {isSw ? 'Unaweza kuona tu — hakuna ruhusa ya kurekodi' : 'View only — no permission to add expenses'}
               </span>
-            )}
+            ) : isOwnerAdmin ? (
+              <span className="text-xs text-slate-300 font-medium px-3 py-2 rounded-lg bg-white/10 border border-white/20">
+                {isSw ? 'Mmiliki/Meneja — ruhusa kamili ya kusimamia' : 'Owner/Manager — full management access'}
+              </span>
+            ) : null}
           </div>
         </div>
 
@@ -552,6 +652,58 @@ export const ExpensesPayrollView: React.FC<ExpensesPayrollViewProps> = ({
             </button>
           );
         })}
+      </div>
+
+      {isOwnerAdmin && (
+        <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#6264A7]/8 border border-[#6264A7]/20 text-[#323130]">
+          <ShieldAlert className="w-4 h-4 text-[#6264A7] shrink-0" />
+          <p className="text-xs font-semibold">
+            {isSw
+              ? 'Mmiliki/Meneja — una ruhusa kamili ya kurekodi matumizi, kuidhinisha posho, kulipa mishahara, kuidhinisha advance na kusimamia timu.'
+              : 'Owner/Manager — you have full access to record expenses, confirm stipends, pay payroll, approve advances and manage team.'}
+          </p>
+        </div>
+      )}
+
+      {/* Per-tab admin quick actions */}
+      <div className="flex flex-wrap items-center gap-2">
+        {activeTab === 'expenses' && canManage && (
+          <button
+            type="button"
+            onClick={() => setIsAddExpenseOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            {isSw ? 'Rekodi Matumizi' : 'Log Expense'}
+          </button>
+        )}
+        {activeTab === 'allowances' && canConfigAllowances && (
+          <>
+            <button
+              type="button"
+              onClick={() => void handleConfirmAllStipends()}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold cursor-pointer"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              {isSw ? 'Thibitisha Zote Leo' : 'Confirm All Today'}
+            </button>
+          </>
+        )}
+        {activeTab === 'payroll' && canPayroll && (
+          <span className="text-[11px] font-semibold text-[#605E5C]">
+            {isSw ? 'Badili mshahara msingi kwa kila mfanyakazi kwenye jedwali, kisha bonyeza Lipa Sasa.' : 'Edit base salary per staff in the table, then click Pay Now.'}
+          </span>
+        )}
+        {activeTab === 'advances' && canAdvances && (
+          <button
+            type="button"
+            onClick={openRecordAdvanceModal}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            {isSw ? 'Rekodi Advance Mpya' : 'Record New Advance'}
+          </button>
+        )}
       </div>
 
       {/* TAB 1: OPERATING EXPENSES LEDGER */}
@@ -878,9 +1030,9 @@ export const ExpensesPayrollView: React.FC<ExpensesPayrollViewProps> = ({
                   onChange={e => setSelectedMonth(e.target.value)}
                   className="text-xs font-bold px-3 py-1.5 rounded-xl border border-[#E1DFDD] bg-[#F8F9FA] text-[#323130]"
                 >
-                  <option value="2026-08">Agosti 2026 (August)</option>
-                  <option value="2026-07">Julai 2026 (July - Paid)</option>
-                  <option value="2026-06">Juni 2026 (June - Paid)</option>
+                  {monthOptions.map(m => (
+                    <option key={m.value} value={m.value}>{m.label}</option>
+                  ))}
                 </select>
               </div>
             </div>
@@ -922,7 +1074,24 @@ export const ExpensesPayrollView: React.FC<ExpensesPayrollViewProps> = ({
                           <div className="font-bold text-[#323130]">{staff.name}</div>
                           <div className="text-[10px] text-[#605E5C]">{staff.role} • NSSF: {staff.nssfNumber || 'N/A'}</div>
                         </td>
-                        <td className="py-3 px-3 text-right font-mono font-bold text-[#323130]">{formatTSh(base)}</td>
+                        <td className="py-3 px-3 text-right font-mono font-bold text-[#323130]">
+                          {canPayroll ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingBaseSalaryStaffId(staff.id);
+                                setEditBaseSalaryAmount(base);
+                              }}
+                              className="inline-flex items-center gap-1 hover:text-indigo-700 cursor-pointer"
+                              title={isSw ? 'Badili mshahara msingi' : 'Edit base salary'}
+                            >
+                              {formatTSh(base)}
+                              <Edit2 className="w-3 h-3" />
+                            </button>
+                          ) : (
+                            formatTSh(base)
+                          )}
+                        </td>
                         <td className="py-3 px-3 text-right font-mono text-emerald-700">{formatTSh(allowances)}</td>
                         <td className="py-3 px-3 text-right font-mono text-rose-600 font-bold">
                           {advancesTotal > 0 ? `-${formatTSh(advancesTotal)}` : '0'}
@@ -996,6 +1165,16 @@ export const ExpensesPayrollView: React.FC<ExpensesPayrollViewProps> = ({
             <span className="text-xs font-bold px-3 py-1 bg-amber-50 text-amber-800 rounded-full border border-amber-200">
               {advances.length} {isSw ? 'Maombi Yapo' : 'Total Requests'}
             </span>
+            {canAdvances && (
+              <button
+                type="button"
+                onClick={openRecordAdvanceModal}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                {isSw ? 'Rekodi Advance' : 'Record Advance'}
+              </button>
+            )}
           </div>
 
           <div className="overflow-x-auto">
@@ -1385,6 +1564,109 @@ export const ExpensesPayrollView: React.FC<ExpensesPayrollViewProps> = ({
                 <Printer className="w-4 h-4" />
                 <span>{isSw ? 'Chapisha Slipi (Print)' : 'Print Payslip'}</span>
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: RECORD SALARY ADVANCE */}
+      {isRecordAdvanceOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-[#F3F2F1] pb-3">
+              <div className="flex items-center gap-2">
+                <DollarSign className="w-5 h-5 text-amber-600" />
+                <h3 className="font-bold text-base text-[#323130]">
+                  {isSw ? 'Rekodi Advance ya Mshahara' : 'Record Salary Advance'}
+                </h3>
+              </div>
+              <button onClick={() => setIsRecordAdvanceOpen(false)} className="p-1 rounded-lg hover:bg-slate-100 cursor-pointer">
+                <X className="w-5 h-5 text-slate-500" />
+              </button>
+            </div>
+            <form onSubmit={handleRecordAdvance} className="space-y-3 text-xs">
+              <div>
+                <label className="font-bold text-[#323130] block mb-1">{isSw ? 'Mfanyakazi' : 'Staff member'} *</label>
+                <select
+                  required
+                  value={advanceStaffId}
+                  onChange={e => setAdvanceStaffId(e.target.value)}
+                  className="w-full px-3 py-2 border border-[#E1DFDD] rounded-xl focus:outline-none"
+                >
+                  {staffList.map(s => (
+                    <option key={s.id} value={s.id}>{s.name} ({s.role})</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="font-bold text-[#323130] block mb-1">{isSw ? 'Kiasi (TSh)' : 'Amount (TSh)'} *</label>
+                <input
+                  type="number"
+                  required
+                  min="1"
+                  value={advanceAmount}
+                  onChange={e => setAdvanceAmount(e.target.value ? Number(e.target.value) : '')}
+                  className="w-full px-3 py-2 border border-[#E1DFDD] rounded-xl font-mono focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="font-bold text-[#323130] block mb-1">{isSw ? 'Sababu' : 'Reason'}</label>
+                <textarea
+                  rows={2}
+                  value={advanceReason}
+                  onChange={e => setAdvanceReason(e.target.value)}
+                  className="w-full px-3 py-2 border border-[#E1DFDD] rounded-xl focus:outline-none resize-none"
+                  placeholder={isSw ? 'Mf. dharura ya matibabu' : 'e.g. medical emergency'}
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button type="button" onClick={() => setIsRecordAdvanceOpen(false)} className="px-4 py-2 rounded-xl border border-[#E1DFDD] text-xs font-bold cursor-pointer">
+                  {isSw ? 'Ghairi' : 'Cancel'}
+                </button>
+                <button type="submit" className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold cursor-pointer">
+                  {isSw ? 'Hifadhi Advance' : 'Save Advance'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: EDIT BASE SALARY */}
+      {editingBaseSalaryStaffId && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-[#F3F2F1] pb-3">
+              <h3 className="font-bold text-base text-[#323130]">
+                {isSw ? 'Badili Mshahara Msingi' : 'Edit Base Salary'}
+              </h3>
+              <button onClick={() => setEditingBaseSalaryStaffId(null)} className="p-1 rounded-lg hover:bg-slate-100 cursor-pointer">
+                <X className="w-5 h-5 text-slate-500" />
+              </button>
+            </div>
+            <div className="space-y-3 text-xs">
+              <p className="text-[#605E5C]">
+                {staffList.find(s => s.id === editingBaseSalaryStaffId)?.name}
+              </p>
+              <input
+                type="number"
+                min="0"
+                value={editBaseSalaryAmount}
+                onChange={e => setEditBaseSalaryAmount(Number(e.target.value))}
+                className="w-full px-3 py-2 border border-[#E1DFDD] rounded-xl font-mono focus:outline-none"
+              />
+              <div className="flex justify-end gap-2">
+                <button type="button" onClick={() => setEditingBaseSalaryStaffId(null)} className="px-4 py-2 rounded-xl border border-[#E1DFDD] text-xs font-bold cursor-pointer">
+                  {isSw ? 'Ghairi' : 'Cancel'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSaveBaseSalary(editingBaseSalaryStaffId)}
+                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold cursor-pointer"
+                >
+                  {isSw ? 'Hifadhi' : 'Save'}
+                </button>
+              </div>
             </div>
           </div>
         </div>

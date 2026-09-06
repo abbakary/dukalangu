@@ -45,7 +45,7 @@ import { ActionBar } from '@/components/v1/ActionBar';
 import { QRCodeModal } from '@/components/v1/QRCodeModal';
 import confetti from 'canvas-confetti';
 import { api } from '@/lib/api';
-import { fetchProductsFromApi, mapProduct, mapStockMovement, optionalApiDate, productToApiPayload } from '@/lib/apiSync';
+import { fetchProductsFromApi, mapProduct, mapStockMovement, mapSupplier, optionalApiDate, productToApiPayload, supplierToApiPayload } from '@/lib/apiSync';
 import { runWithOfflineQueue } from '@/lib/offlineMutations';
 import { useOfflineStore } from '@/stores';
 import type { SyncQueueItem } from '@/lib/transactionEngine';
@@ -214,7 +214,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     unitCost: products[0]?.cost || 3000,
     batchNumber: `BT-${new Date().getFullYear()}-R1`,
     expiryDate: '2028-12-31',
-    supplierName: suppliers[0]?.name || 'Direct Procurement',
+    supplierId: suppliers[0]?.id || '',
+    supplierName: suppliers[0]?.name || '',
     notes: 'Direct shop stock replenishment',
   });
 
@@ -225,12 +226,132 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     reason: 'out_damage' as 'out_damage' | 'out_expiry' | 'out_adjustment' | 'out_return',
     notes: 'Packaging damaged during shelf restocking',
     operatorName: 'Store Clerk',
+    supplierId: suppliers[0]?.id || '',
+    supplierName: suppliers[0]?.name || '',
+  });
+
+  const [isQuickAddSupplierOpen, setIsQuickAddSupplierOpen] = useState(false);
+  const [quickSupplierTarget, setQuickSupplierTarget] = useState<'stockIn' | 'stockOut'>('stockIn');
+  const [quickSupplierForm, setQuickSupplierForm] = useState({
+    name: '',
+    contactPerson: '',
+    phone: '',
+    email: '',
+    category: 'General',
+    paymentTerms: 'Net 30 Days',
+    leadTimeDays: 7,
   });
 
   const triggerToast = (msg: string) => {
     setSuccessToast(msg);
     setTimeout(() => setSuccessToast(null), 5000);
   };
+
+  const openQuickAddSupplier = (target: 'stockIn' | 'stockOut') => {
+    setQuickSupplierTarget(target);
+    setQuickSupplierForm({
+      name: '',
+      contactPerson: '',
+      phone: '',
+      email: '',
+      category: 'General',
+      paymentTerms: 'Net 30 Days',
+      leadTimeDays: 7,
+    });
+    setIsQuickAddSupplierOpen(true);
+  };
+
+  const applySupplierSelection = (id: string, name: string, target: 'stockIn' | 'stockOut') => {
+    if (target === 'stockIn') {
+      setManualStockInForm(prev => ({ ...prev, supplierId: id, supplierName: name }));
+    } else {
+      setStockOutForm(prev => ({ ...prev, supplierId: id, supplierName: name }));
+    }
+  };
+
+  const handleQuickAddSupplier = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quickSupplierForm.name.trim()) return;
+    try {
+      const raw = await api.createSupplier(supplierToApiPayload({
+        name: quickSupplierForm.name.trim(),
+        contactPerson: quickSupplierForm.contactPerson || 'Sales Representative',
+        phone: quickSupplierForm.phone,
+        email: quickSupplierForm.email,
+        category: quickSupplierForm.category,
+        paymentTerms: quickSupplierForm.paymentTerms,
+        leadTimeDays: Number(quickSupplierForm.leadTimeDays) || 7,
+        rating: 4.8,
+      }));
+      const created = mapSupplier(raw as Record<string, unknown>);
+      setSuppliers?.(prev => [created, ...prev]);
+      applySupplierSelection(created.id, created.name, quickSupplierTarget);
+      setIsQuickAddSupplierOpen(false);
+      triggerToast(isSw ? 'Msambazaji ameongezwa' : 'Supplier added');
+    } catch (err) {
+      alert((err as Error).message);
+    }
+  };
+
+  const renderSupplierField = (
+    supplierId: string,
+    supplierName: string,
+    target: 'stockIn' | 'stockOut',
+    required = true,
+  ) => (
+    <div>
+      <label className="block font-semibold text-[#323130] mb-1">
+        {isSw ? 'Msambazaji *' : 'Supplier *'}
+      </label>
+      {suppliers.length > 0 ? (
+        <div className="flex gap-2">
+          <select
+            required={required}
+            value={supplierId || suppliers[0]?.id || ''}
+            onChange={e => {
+              const sel = suppliers.find(s => s.id === e.target.value);
+              applySupplierSelection(sel?.id || '', sel?.name || '', target);
+            }}
+            className="flex-1 px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white outline-none"
+          >
+            {suppliers.map(s => (
+              <option key={s.id} value={s.id}>{s.name}{s.category ? ` • ${s.category}` : ''}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => openQuickAddSupplier(target)}
+            className="px-3 py-2 rounded-lg border border-[#EDEBE9] bg-white text-[11px] font-bold text-[#6264A7] hover:bg-[#FAF9F8] whitespace-nowrap"
+          >
+            + {isSw ? 'Mpya' : 'New'}
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <input
+            type="text"
+            required={required}
+            placeholder={isSw ? 'Jina la msambazaji' : 'Supplier name'}
+            value={supplierName}
+            onChange={e => applySupplierSelection('', e.target.value, target)}
+            className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white outline-none"
+          />
+          <button
+            type="button"
+            onClick={() => openQuickAddSupplier(target)}
+            className="text-[11px] font-bold text-[#6264A7] hover:underline"
+          >
+            + {isSw ? 'Sajili msambazaji mpya' : 'Register new supplier'}
+          </button>
+        </div>
+      )}
+      {(supplierId || supplierName) && (
+        <p className="text-[10px] text-[#605E5C] mt-1">
+          {isSw ? 'Chagua msambazaji halisi ili gharama na faida zihesabiwe sahihi.' : 'Select the actual supplier so costs and profit track correctly.'}
+        </p>
+      )}
+    </div>
+  );
 
   // 1-Click Receive PO shortcut right inside Inventory
   const handleQuickReceivePO = (po: PurchaseOrder) => {
@@ -420,14 +541,26 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
     const qty = Number(manualStockInForm.quantity);
     const unitCost = Number(manualStockInForm.unitCost);
+    const supplierName = manualStockInForm.supplierName.trim();
+    if (!manualStockInForm.supplierId && !supplierName) {
+      alert(isSw ? 'Msambazaji anahitajika.' : 'Supplier is required.');
+      return;
+    }
+    if (unitCost <= 0) {
+      alert(isSw ? 'Bei ya kununua lazima iwe zaidi ya sifuri.' : 'Unit cost must be greater than zero.');
+      return;
+    }
 
     const stockPayload = {
       product_id: prod.id,
       quantity: qty,
       movement_type: 'in_adjustment',
+      unit_cost: unitCost,
       batch_number: manualStockInForm.batchNumber,
       expiry_date: optionalApiDate(manualStockInForm.expiryDate),
-      notes: `Manual Stock In: ${manualStockInForm.notes} (${manualStockInForm.supplierName})`,
+      supplier_id: manualStockInForm.supplierId || undefined,
+      supplier_name: supplierName,
+      notes: `Manual Stock In: ${manualStockInForm.notes} (${supplierName})`,
     };
 
     try {
@@ -445,6 +578,10 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             cost: unitCost > 0 ? unitCost : prod.cost,
             batch_number: manualStockInForm.batchNumber || prod.batchNumber,
             expiry_date: optionalApiDate(manualStockInForm.expiryDate || prod.expiryDate),
+            metadata_json: {
+              supplier_id: manualStockInForm.supplierId || undefined,
+              supplier_name: supplierName,
+            },
           });
           setProducts(prev => prev.map(p => p.id === prod.id ? mapProduct(updatedRaw as Record<string, unknown>) : p));
           setStockMovements(prev => [mapStockMovement(movRaw as Record<string, unknown>), ...prev]);
@@ -490,13 +627,25 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     if (!prod) return;
 
     const qty = Number(stockOutForm.quantity);
+    if (stockOutForm.reason === 'out_return' && !stockOutForm.supplierId && !stockOutForm.supplierName.trim()) {
+      alert(isSw ? 'Chagua msambazaji unayemrudishia bidhaa.' : 'Select the supplier you are returning stock to.');
+      return;
+    }
 
-    const stockPayload = {
+    const stockPayload: Record<string, unknown> = {
       product_id: prod.id,
       quantity: -qty,
       movement_type: stockOutForm.reason === 'out_expiry' ? 'out_expired' : 'out_adjustment',
       notes: stockOutForm.notes,
     };
+    if (stockOutForm.reason === 'out_return') {
+      stockPayload.reason = 'out_return';
+      if (stockOutForm.supplierId) stockPayload.supplier_id = stockOutForm.supplierId;
+      if (stockOutForm.supplierName.trim()) {
+        stockPayload.supplier_name = stockOutForm.supplierName.trim();
+        stockPayload.notes = `Return to ${stockOutForm.supplierName.trim()}: ${stockOutForm.notes}`;
+      }
+    }
 
     try {
       const outcome = await runWithOfflineQueue({
@@ -1308,11 +1457,17 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 </div>
               </div>
 
+              {renderSupplierField(
+                manualStockInForm.supplierId,
+                manualStockInForm.supplierName,
+                'stockIn',
+              )}
+
               <div>
-                <label className="block font-semibold text-[#323130] mb-1">Supplier Source / Notes</label>
+                <label className="block font-semibold text-[#323130] mb-1">{isSw ? 'Maelezo' : 'Notes'}</label>
                 <input
                   type="text"
-                  placeholder="e.g. Direct manufacturer delivery"
+                  placeholder={isSw ? 'mf. Uwasilishaji wa moja kwa moja' : 'e.g. Direct manufacturer delivery'}
                   value={manualStockInForm.notes}
                   onChange={e => setManualStockInForm({ ...manualStockInForm, notes: e.target.value })}
                   className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white outline-none"
@@ -1394,6 +1549,12 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 </div>
               </div>
 
+              {stockOutForm.reason === 'out_return' && renderSupplierField(
+                stockOutForm.supplierId,
+                stockOutForm.supplierName,
+                'stockOut',
+              )}
+
               <div>
                 <label className="block font-semibold text-[#323130] mb-1">Detailed Notes</label>
                 <input
@@ -1419,6 +1580,74 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 className="px-5 py-1.5 text-xs font-bold text-white bg-[#D13438] hover:bg-[#B12A2E] rounded-lg shadow-xs"
               >
                 Deduct & Write-Off Stock
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Quick Add Supplier (from stock in/out) */}
+      {isQuickAddSupplierOpen && (
+        <div className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <form onSubmit={handleQuickAddSupplier} className="bg-white rounded-2xl max-w-md w-full border border-[#E1DFDD] shadow-2xl p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-[#EDEBE9] pb-3">
+              <h3 className="font-bold text-sm text-[#323130]">{isSw ? 'Ongeza Msambazaji' : 'Add Supplier'}</h3>
+              <button type="button" onClick={() => setIsQuickAddSupplierOpen(false)} className="text-[#605E5C]">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="space-y-3 text-xs">
+              <input
+                required
+                placeholder={isSw ? 'Jina la kampuni *' : 'Company name *'}
+                value={quickSupplierForm.name}
+                onChange={e => setQuickSupplierForm({ ...quickSupplierForm, name: e.target.value })}
+                className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] outline-none"
+              />
+              <input
+                placeholder={isSw ? 'Mhusika' : 'Contact person'}
+                value={quickSupplierForm.contactPerson}
+                onChange={e => setQuickSupplierForm({ ...quickSupplierForm, contactPerson: e.target.value })}
+                className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] outline-none"
+              />
+              <input
+                placeholder={isSw ? 'Simu' : 'Phone'}
+                value={quickSupplierForm.phone}
+                onChange={e => setQuickSupplierForm({ ...quickSupplierForm, phone: e.target.value })}
+                className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] outline-none"
+              />
+              <input
+                placeholder="Email"
+                value={quickSupplierForm.email}
+                onChange={e => setQuickSupplierForm({ ...quickSupplierForm, email: e.target.value })}
+                className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] outline-none"
+              />
+              <select
+                value={quickSupplierForm.category}
+                onChange={e => setQuickSupplierForm({ ...quickSupplierForm, category: e.target.value })}
+                className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] outline-none"
+              >
+                {['General', 'Food & Beverages', 'Pharmaceuticals', 'Electronics', 'Hardware & Building', 'Other'].map(c => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+              <select
+                value={quickSupplierForm.paymentTerms}
+                onChange={e => setQuickSupplierForm({ ...quickSupplierForm, paymentTerms: e.target.value })}
+                className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] outline-none"
+              >
+                <option value="Net 30 Days">Net 30 Days</option>
+                <option value="Net 15 Days">Net 15 Days</option>
+                <option value="Cash on Delivery">Cash on Delivery</option>
+                <option value="Prepayment">Prepayment</option>
+              </select>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" onClick={() => setIsQuickAddSupplierOpen(false)} className="px-4 py-1.5 text-xs font-semibold text-[#605E5C] bg-[#F3F2F1] rounded-lg">
+                {t('cancel')}
+              </button>
+              <button type="submit" className="px-5 py-1.5 text-xs font-bold text-white bg-[#6264A7] hover:bg-[#555793] rounded-lg">
+                {isSw ? 'Hifadhi Msambazaji' : 'Save Supplier'}
               </button>
             </div>
           </form>
