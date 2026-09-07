@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import type { AuthUser, BusinessType, Language, SaaSPlanTier } from '@/types/v1';
-import { ALL_BUSINESS_TYPES, getBusinessProfile } from '@/lib/businessEngine';
+import { ALL_BUSINESS_TYPES, getBusinessProfile, isBusinessTypeRegistrationDisabled, businessTypeUnavailableMessage } from '@/lib/businessEngine';
 import { api } from '@/lib/api';
 import { loginAndLoadUser, mapApiUserToAuthUser, persistAuthUser } from '@/lib/authBridge';
 import { formatApiError } from '@/lib/formatApiError';
@@ -64,8 +64,13 @@ export const PublicRegisterWizardView: React.FC<PublicRegisterWizardViewProps> =
   const [acceptedTerms, setAcceptedTerms] = useState(false);
 
   useEffect(() => {
-    if (initialBusinessType) setBusinessType(initialBusinessType);
-  }, [initialBusinessType]);
+    if (initialBusinessType && !isBusinessTypeRegistrationDisabled(initialBusinessType)) {
+      setBusinessType(initialBusinessType);
+    } else if (initialBusinessType && isBusinessTypeRegistrationDisabled(initialBusinessType)) {
+      setBusinessType('retail');
+      setError(businessTypeUnavailableMessage(isSw, initialBusinessType));
+    }
+  }, [initialBusinessType, isSw]);
 
   useEffect(() => {
     if (initialPlan) setSelectedPlan(initialPlan);
@@ -81,6 +86,10 @@ export const PublicRegisterWizardView: React.FC<PublicRegisterWizardViewProps> =
       const password = regPassword.trim();
       if (password.length < 6) { setError(isSw ? 'Nenosiri angalau herufi 6.' : 'Password min 6 chars.'); return false; }
       if (password !== regPasswordConfirm.trim()) { setError(isSw ? 'Nenosiri halilingani.' : 'Passwords mismatch.'); return false; }
+    }
+    if (s === 2 && isBusinessTypeRegistrationDisabled(businessType)) {
+      setError(businessTypeUnavailableMessage(isSw, businessType));
+      return false;
     }
     if (s === 3 && !selectedPlan) {
       setError(isSw ? 'Chagua kifurushi.' : 'Select a plan.');
@@ -119,6 +128,11 @@ export const PublicRegisterWizardView: React.FC<PublicRegisterWizardViewProps> =
     }
     if (!acceptedTerms) {
       setError(termsMustAcceptError(isSw));
+      return;
+    }
+    if (isBusinessTypeRegistrationDisabled(businessType)) {
+      setError(businessTypeUnavailableMessage(isSw, businessType));
+      setStep(2);
       return;
     }
     setLoading(true);
@@ -211,15 +225,40 @@ export const PublicRegisterWizardView: React.FC<PublicRegisterWizardViewProps> =
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-80 overflow-y-auto">
                 {ALL_BUSINESS_TYPES.map(type => {
                   const p = getBusinessProfile(type);
+                  const disabled = isBusinessTypeRegistrationDisabled(type);
                   return (
                     <button
                       key={type}
                       type="button"
-                      onClick={() => setBusinessType(type)}
-                      className={`p-3 rounded-xl border text-left cursor-pointer transition-all ${businessType === type ? 'border-teal-500 bg-teal-50 ring-1 ring-teal-500' : 'border-slate-200 hover:border-slate-300'}`}
+                      disabled={disabled}
+                      onClick={() => {
+                        if (disabled) {
+                          setError(businessTypeUnavailableMessage(isSw, type));
+                          return;
+                        }
+                        setError('');
+                        setBusinessType(type);
+                      }}
+                      className={`p-3 rounded-xl border text-left transition-all relative ${
+                        disabled
+                          ? 'border-slate-200 bg-slate-50 opacity-70 cursor-not-allowed'
+                          : businessType === type
+                            ? 'border-teal-500 bg-teal-50 ring-1 ring-teal-500 cursor-pointer'
+                            : 'border-slate-200 hover:border-slate-300 cursor-pointer'
+                      }`}
                     >
+                      {disabled && (
+                        <span className="absolute top-2 right-2 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                          {isSw ? 'Inakuja' : 'Coming soon'}
+                        </span>
+                      )}
                       <span className="text-xl">{p.icon}</span>
                       <div className="text-xs font-bold mt-1">{isSw ? p.label_sw : p.label_en}</div>
+                      {disabled && (
+                        <p className="text-[10px] text-slate-500 mt-1 leading-snug">
+                          {businessTypeUnavailableMessage(isSw, type)}
+                        </p>
+                      )}
                     </button>
                   );
                 })}

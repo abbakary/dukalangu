@@ -645,6 +645,21 @@ export const BUSINESS_ENGINE: Record<BusinessType, BusinessProfileConfig> = {
 
 export const ALL_BUSINESS_TYPES = Object.keys(BUSINESS_ENGINE) as BusinessType[];
 
+/** Business types temporarily unavailable for new registrations. */
+export const REGISTRATION_DISABLED_BUSINESS_TYPES: BusinessType[] = ['restaurant'];
+
+export function isBusinessTypeRegistrationDisabled(type?: string | BusinessType): boolean {
+  return REGISTRATION_DISABLED_BUSINESS_TYPES.includes((type ?? '') as BusinessType);
+}
+
+export function businessTypeUnavailableMessage(isSw: boolean, type?: string | BusinessType): string {
+  const profile = type ? getBusinessProfile(type) : null;
+  const name = profile ? (isSw ? profile.label_sw : profile.label_en) : isSw ? 'Mkahawa' : 'Restaurant';
+  return isSw
+    ? `${name} bado haipatikani kwa sasa. Tunafanya kazi kuileta hivi karibuni — tafadhali chagua aina nyingine ya biashara.`
+    : `${name} is not available yet. We're working to launch it soon — please choose another business type.`;
+}
+
 export function getBusinessProfile(type?: string): BusinessProfileConfig {
   const key = (type as BusinessType) || 'retail';
   return BUSINESS_ENGINE[key] ?? BUSINESS_ENGINE.retail;

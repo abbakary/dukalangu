@@ -24,7 +24,7 @@ import {
   EyeOff
 } from 'lucide-react';
 import { BusinessType, Language, UserRole, VendorApplication, AuthUser } from '@/types/v1';
-import { ALL_BUSINESS_TYPES, getBusinessProfile } from '@/lib/businessEngine';
+import { ALL_BUSINESS_TYPES, getBusinessProfile, isBusinessTypeRegistrationDisabled, businessTypeUnavailableMessage } from '@/lib/businessEngine';
 import { api } from '@/lib/api';
 import { loginAndLoadUser, mapApiUserToAuthUser, persistAuthUser } from '@/lib/authBridge';
 import { formatApiError } from '@/lib/formatApiError';
@@ -75,8 +75,13 @@ export const AuthModalOrView: React.FC<AuthModalOrViewProps> = ({
   const [logoEmoji, setLogoEmoji] = useState<string>('💊');
 
   useEffect(() => {
-    if (initialBusinessType) setBusinessType(initialBusinessType);
-  }, [initialBusinessType]);
+    if (initialBusinessType && !isBusinessTypeRegistrationDisabled(initialBusinessType)) {
+      setBusinessType(initialBusinessType);
+    } else if (initialBusinessType && isBusinessTypeRegistrationDisabled(initialBusinessType)) {
+      setBusinessType('retail');
+      setRegisterError(businessTypeUnavailableMessage(language === 'sw', initialBusinessType));
+    }
+  }, [initialBusinessType, language]);
 
   useEffect(() => {
     setMode(initialMode);
@@ -116,6 +121,10 @@ export const AuthModalOrView: React.FC<AuthModalOrViewProps> = ({
     }
     if (password !== regPasswordConfirm.trim()) {
       setRegisterError(isSw ? 'Nenosiri halilingani.' : 'Passwords do not match.');
+      return;
+    }
+    if (isBusinessTypeRegistrationDisabled(businessType)) {
+      setRegisterError(businessTypeUnavailableMessage(isSw, businessType));
       return;
     }
     const phone = regPhone.trim().replace(/\s+/g, '');
@@ -175,6 +184,10 @@ export const AuthModalOrView: React.FC<AuthModalOrViewProps> = ({
         setRegisterError(isSw ? 'Nenosiri halilingani.' : 'Passwords do not match.');
         return false;
       }
+    }
+    if (step === 2 && isBusinessTypeRegistrationDisabled(businessType)) {
+      setRegisterError(businessTypeUnavailableMessage(isSw, businessType));
+      return false;
     }
     if (step === 3 && !businessName.trim()) {
       setRegisterError(isSw ? 'Weka jina rasmi la biashara.' : 'Enter your official business name.');
@@ -456,26 +469,42 @@ export const AuthModalOrView: React.FC<AuthModalOrViewProps> = ({
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-[320px] overflow-y-auto pr-1">
                     {ALL_BUSINESS_TYPES.map((type) => {
                       const p = getBusinessProfile(type);
+                      const disabled = isBusinessTypeRegistrationDisabled(type);
                       return (
                       <button
                         key={type}
                         type="button"
+                        disabled={disabled}
                         onClick={() => {
+                          if (disabled) {
+                            setRegisterError(businessTypeUnavailableMessage(isSw, type));
+                            return;
+                          }
+                          setRegisterError('');
                           setBusinessType(type);
                           setLogoEmoji(p.icon);
                         }}
-                        className={`p-3 rounded-xl border text-left cursor-pointer transition-all ${
-                          businessType === type
-                            ? 'bg-[#6264A7]/10 border-[#6264A7] ring-1 ring-[#6264A7]'
-                            : 'bg-[#F8F8F8] border-[#EDEBE9] hover:bg-white text-[#605E5C]'
+                        className={`p-3 rounded-xl border text-left transition-all relative ${
+                          disabled
+                            ? 'bg-slate-50 border-slate-200 opacity-70 cursor-not-allowed'
+                            : businessType === type
+                              ? 'bg-[#6264A7]/10 border-[#6264A7] ring-1 ring-[#6264A7] cursor-pointer'
+                              : 'bg-[#F8F8F8] border-[#EDEBE9] hover:bg-white text-[#605E5C] cursor-pointer'
                         }`}
                       >
+                        {disabled && (
+                          <span className="absolute top-2 right-2 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                            {isSw ? 'Inakuja' : 'Coming soon'}
+                          </span>
+                        )}
                         <div className="flex items-center gap-2 mb-1">
                           <span className="text-lg">{p.icon}</span>
                           <span className="text-xs font-bold text-[#323130]">{isSw ? p.label_sw : p.label_en}</span>
                         </div>
                         <p className="text-[10px] text-[#605E5C] leading-snug">
-                          {p.modules.slice(0, 3).join(' • ')}
+                          {disabled
+                            ? businessTypeUnavailableMessage(isSw, type)
+                            : p.modules.slice(0, 3).join(' • ')}
                         </p>
                       </button>
                     );})}
