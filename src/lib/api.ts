@@ -52,7 +52,14 @@ class ApiClient {
       'Content-Type': 'application/json',
       ...(options.headers as Record<string, string>),
     };
-    if (this.accessToken) headers['Authorization'] = `Bearer ${this.accessToken}`;
+    // Public auth endpoints must not send a leftover session token (can break CORS preflight / confuse proxies).
+    const isPublicAuth =
+      path.startsWith('/auth/login') ||
+      path.startsWith('/auth/register') ||
+      path.startsWith('/auth/refresh');
+    if (this.accessToken && !isPublicAuth) {
+      headers['Authorization'] = `Bearer ${this.accessToken}`;
+    }
 
     let res: Response;
     try {
@@ -63,7 +70,7 @@ class ApiClient {
       );
     }
 
-    if (res.status === 401 && this.refreshToken) {
+    if (res.status === 401 && this.refreshToken && !isPublicAuth) {
       const refreshed = await this.tryRefresh();
       if (refreshed) {
         headers['Authorization'] = `Bearer ${this.accessToken}`;
@@ -107,15 +114,32 @@ class ApiClient {
     });
   }
   register(data: Record<string, string>) {
+    // Fresh signup must not reuse a previous session.
+    this.clearTokens();
     const payload = { ...data };
     if (payload.email) payload.email = payload.email.trim().toLowerCase();
     if (typeof payload.password === 'string') payload.password = payload.password.trim();
+    if (typeof payload.phone === 'string') payload.phone = payload.phone.trim().replace(/\s+/g, '');
+    if (typeof payload.owner_name === 'string') payload.owner_name = payload.owner_name.trim();
+    if (typeof payload.business_name === 'string') payload.business_name = payload.business_name.trim();
     if (!payload.email || !payload.email.includes('@')) {
       return Promise.reject(new Error('Enter a valid email address'));
     }
     if (!payload.password || payload.password.length < 6) {
       return Promise.reject(new Error('Password must be at least 6 characters'));
     }
+    if (!payload.phone || payload.phone.replace(/\D/g, '').length < 9) {
+      return Promise.reject(new Error('Enter a valid phone number (+255...)'));
+    }
+    if (!payload.business_name || !payload.owner_name) {
+      return Promise.reject(new Error('Business name and owner name are required'));
+    }
+    // Normalize plan aliases the UI may still send.
+    if (payload.plan_tier === 'growth' || payload.plan_tier === 'pro') {
+      payload.plan_tier = 'biashara_pro';
+    }
+    if (payload.plan_tier === 'free_starter') payload.plan_tier = 'starter';
+    if (payload.business_type === 'wholesale') payload.business_type = 'retail';
     return this.request('/auth/register', { method: 'POST', body: JSON.stringify(payload) });
   }
   getMe() {

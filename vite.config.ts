@@ -79,7 +79,8 @@ export default defineConfig(({ mode }) => {
         '/api': {
           target: backendTarget,
           changeOrigin: true,
-          secure: true,
+          // Railway/edge TLS often fails Node's default CA store on Windows; browser TLS is fine.
+          secure: false,
         },
       },
     },
@@ -89,7 +90,7 @@ export default defineConfig(({ mode }) => {
         '/api': {
           target: backendTarget,
           changeOrigin: true,
-          secure: true,
+          secure: false,
         },
       },
     },

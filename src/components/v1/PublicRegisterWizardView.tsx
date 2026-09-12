@@ -13,7 +13,7 @@ import confetti from 'canvas-confetti';
 import type { AuthUser, BusinessType, Language, SaaSPlanTier } from '@/types/v1';
 import { ALL_BUSINESS_TYPES, getBusinessProfile, isBusinessTypeRegistrationDisabled, businessTypeUnavailableMessage } from '@/lib/businessEngine';
 import { api } from '@/lib/api';
-import { loginAndLoadUser, mapApiUserToAuthUser, persistAuthUser } from '@/lib/authBridge';
+import { loginAndLoadUser } from '@/lib/authBridge';
 import { formatApiError } from '@/lib/formatApiError';
 import { useSaasPlans } from '@/context/SaasPlansContext';
 import { formatPlanPrice, planBranchLabel, planFeatures, planPeriod } from '@/lib/saasPlans';
@@ -52,7 +52,7 @@ export const PublicRegisterWizardView: React.FC<PublicRegisterWizardViewProps> =
 
   const [fullName, setFullName] = useState('');
   const [regEmail, setRegEmail] = useState('');
-  const [regPhone, setRegPhone] = useState('+255 7');
+  const [regPhone, setRegPhone] = useState('+255');
   const [regPassword, setRegPassword] = useState('');
   const [regPasswordConfirm, setRegPasswordConfirm] = useState('');
   const [businessType, setBusinessType] = useState<BusinessType>(initialBusinessType ?? 'retail');
@@ -85,6 +85,11 @@ export const PublicRegisterWizardView: React.FC<PublicRegisterWizardViewProps> =
       if (!regEmail.trim()) { setError(isSw ? 'Weka barua pepe.' : 'Enter email.'); return false; }
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(regEmail.trim())) {
         setError(isSw ? 'Weka barua pepe sahihi (lazima iwe na @).' : 'Enter a valid email address (must include @).');
+        return false;
+      }
+      const phoneDigits = regPhone.trim().replace(/\s+/g, '').replace(/\D/g, '');
+      if (phoneDigits.length < 9) {
+        setError(isSw ? 'Weka namba ya simu kamili (mf. +255712345678).' : 'Enter a full phone number (e.g. +255712345678).');
         return false;
       }
       const password = regPassword.trim();
@@ -125,8 +130,8 @@ export const PublicRegisterWizardView: React.FC<PublicRegisterWizardViewProps> =
       return;
     }
     const phone = regPhone.trim().replace(/\s+/g, '');
-    if (phone.length < 10) {
-      setError(isSw ? 'Weka namba ya simu sahihi (+255...).' : 'Enter a valid phone number (+255...).');
+    if (phone.replace(/\D/g, '').length < 9) {
+      setError(isSw ? 'Weka namba ya simu kamili (mf. +255712345678).' : 'Enter a full phone number (e.g. +255712345678).');
       setStep(1);
       return;
     }
@@ -146,7 +151,7 @@ export const PublicRegisterWizardView: React.FC<PublicRegisterWizardViewProps> =
         business_name: businessName.trim(),
         owner_name: fullName.trim(),
         email: regEmail.trim().toLowerCase(),
-        phone: phone || '+255700000000',
+        phone,
         password,
         business_type: businessType,
         tin_number: tinNumber.trim(),
@@ -155,11 +160,7 @@ export const PublicRegisterWizardView: React.FC<PublicRegisterWizardViewProps> =
         district: location.trim() || 'Ilala',
         plan_tier: selectedPlan,
       });
-      const tokens = await api.login(regEmail.trim().toLowerCase(), password);
-      api.setTokens(tokens.access_token, tokens.refresh_token, tokens.expires_in_days);
-      const me = await api.getMe();
-      const user = mapApiUserToAuthUser(me as Parameters<typeof mapApiUserToAuthUser>[0]);
-      persistAuthUser(user);
+      const user = await loginAndLoadUser(regEmail.trim().toLowerCase(), password);
       confetti({ particleCount: 40, spread: 60, origin: { y: 0.6 } });
       onRegisterSuccess(user);
     } catch (err) {
@@ -341,7 +342,7 @@ export const PublicRegisterWizardView: React.FC<PublicRegisterWizardViewProps> =
                 <div className="pt-2 border-t border-slate-200">
                   <span className="text-slate-500">{isSw ? 'Kifurushi:' : 'Plan:'}</span>{' '}
                   <strong>{selectedPlanMeta ? (isSw ? selectedPlanMeta.nameSw : selectedPlanMeta.name) : selectedPlan}</strong>
-                  {!selectedPlanMeta?.contactUs && (
+                  {!selectedPlanMeta?.contactUs && selectedPlanMeta && (
                     <span className="text-slate-500"> — {formatPlanPrice(selectedPlanMeta, isSw)}{planPeriod(isSw)}</span>
                   )}
                 </div>

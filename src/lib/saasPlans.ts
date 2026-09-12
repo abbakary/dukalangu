@@ -70,7 +70,8 @@ export function mapApiPlanToPatch(patch: Partial<PublicPlan>, isSw?: boolean): R
   return out;
 }
 
-export function formatPlanPrice(plan: PublicPlan, isSw: boolean): string {
+export function formatPlanPrice(plan: PublicPlan | null | undefined, isSw: boolean): string {
+  if (!plan) return isSw ? '—' : '—';
   if (plan.contactUs) return isSw ? 'Maalum' : 'Custom';
   return `TZS ${plan.priceMonthlyTzs.toLocaleString('en-TZ')}`;
 }

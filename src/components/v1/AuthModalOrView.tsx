@@ -26,7 +26,7 @@ import {
 import { BusinessType, Language, UserRole, VendorApplication, AuthUser } from '@/types/v1';
 import { ALL_BUSINESS_TYPES, getBusinessProfile, isBusinessTypeRegistrationDisabled, businessTypeUnavailableMessage } from '@/lib/businessEngine';
 import { api } from '@/lib/api';
-import { loginAndLoadUser, mapApiUserToAuthUser, persistAuthUser } from '@/lib/authBridge';
+import { loginAndLoadUser } from '@/lib/authBridge';
 import { formatApiError } from '@/lib/formatApiError';
 import confetti from 'canvas-confetti';
 
@@ -62,12 +62,13 @@ export const AuthModalOrView: React.FC<AuthModalOrViewProps> = ({
   // Register Wizard Form State
   const [fullName, setFullName] = useState<string>('');
   const [regEmail, setRegEmail] = useState<string>('');
-  const [regPhone, setRegPhone] = useState<string>('+255 7');
+  const [regPhone, setRegPhone] = useState<string>('+255');
   const [regPassword, setRegPassword] = useState<string>('');
   const [regPasswordConfirm, setRegPasswordConfirm] = useState<string>('');
   const [registerError, setRegisterError] = useState<string>('');
+  const [registerLoading, setRegisterLoading] = useState(false);
   const [accountRole, setAccountRole] = useState<UserRole>('vendor_owner');
-  const [businessType, setBusinessType] = useState<BusinessType>(initialBusinessType ?? 'pharmacy');
+  const [businessType, setBusinessType] = useState<BusinessType>(initialBusinessType ?? 'retail');
   const [businessName, setBusinessName] = useState<string>('');
   const [location, setLocation] = useState<string>('');
   const [tinNumber, setTinNumber] = useState<string>('');
@@ -128,17 +129,18 @@ export const AuthModalOrView: React.FC<AuthModalOrViewProps> = ({
       return;
     }
     const phone = regPhone.trim().replace(/\s+/g, '');
-    if (phone.length < 10) {
-      setRegisterError(isSw ? 'Weka namba ya simu sahihi (+255...).' : 'Enter a valid phone number (+255...).');
+    if (phone.replace(/\D/g, '').length < 9) {
+      setRegisterError(isSw ? 'Weka namba ya simu kamili (mf. +255712345678).' : 'Enter a full phone number (e.g. +255712345678).');
       return;
     }
 
+    setRegisterLoading(true);
     try {
       await api.register({
         business_name: businessName.trim(),
         owner_name: fullName.trim(),
         email: regEmail.trim().toLowerCase(),
-        phone: phone || '+255700000000',
+        phone,
         password,
         business_type: businessType,
         tin_number: tinNumber.trim(),
@@ -147,16 +149,14 @@ export const AuthModalOrView: React.FC<AuthModalOrViewProps> = ({
         district: location.trim() || 'Ilala',
         plan_tier: 'starter',
       });
-      const tokens = await api.login(regEmail.trim().toLowerCase(), password);
-      api.setTokens(tokens.access_token, tokens.refresh_token, tokens.expires_in_days);
-      const me = await api.getMe();
-      const user = mapApiUserToAuthUser(me as Parameters<typeof mapApiUserToAuthUser>[0]);
-      persistAuthUser(user);
+      const user = await loginAndLoadUser(regEmail.trim().toLowerCase(), password);
       onLoginSuccess(user, { fromRegistration: true });
       confetti({ particleCount: 40, spread: 60, origin: { y: 0.6 } });
       onClose();
     } catch (err) {
       setRegisterError(formatApiError(err, isSw));
+    } finally {
+      setRegisterLoading(false);
     }
   };
 
@@ -172,8 +172,8 @@ export const AuthModalOrView: React.FC<AuthModalOrViewProps> = ({
         return false;
       }
       const phone = regPhone.trim().replace(/\s+/g, '');
-      if (phone.length < 10) {
-        setRegisterError(isSw ? 'Weka namba ya simu sahihi (+255...).' : 'Enter a valid phone number (+255...).');
+      if (phone.replace(/\D/g, '').length < 9) {
+        setRegisterError(isSw ? 'Weka namba ya simu kamili (mf. +255712345678).' : 'Enter a full phone number (e.g. +255712345678).');
         return false;
       }
       if (!regPassword || regPassword.length < 6) {
@@ -646,11 +646,16 @@ export const AuthModalOrView: React.FC<AuthModalOrViewProps> = ({
                 ) : (
                   <button
                     type="button"
-                    onClick={handleCompleteRegistration}
-                    className="px-5 py-2 bg-[#107C10] hover:bg-[#0e6b0e] text-white rounded-lg text-xs font-bold cursor-pointer flex items-center gap-1.5 shadow-xs"
+                    disabled={registerLoading}
+                    onClick={() => void handleCompleteRegistration()}
+                    className="px-5 py-2 bg-[#107C10] hover:bg-[#0e6b0e] text-white rounded-lg text-xs font-bold cursor-pointer flex items-center gap-1.5 shadow-xs disabled:opacity-60"
                   >
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>{isSw ? 'Tuma Ombi la Duka' : 'Submit Application'}</span>
+                    <span>
+                      {registerLoading
+                        ? (isSw ? 'Inasajili…' : 'Creating…')
+                        : (isSw ? 'Tuma Ombi la Duka' : 'Submit Application')}
+                    </span>
                   </button>
                 )}
               </div>

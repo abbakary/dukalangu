@@ -4,16 +4,18 @@ export const RAILWAY_API_BASE =
   'https://dukaplusbackend-production.up.railway.app/api/v1';
 
 export function getApiBaseUrl(): string {
+  // Local Vite DEV: same-origin proxy (vite.config.ts → Railway). Avoids browser CORS.
+  // Set VITE_API_FORCE_DIRECT=true to call Railway from the browser during local dev.
+  if (import.meta.env.DEV && import.meta.env.VITE_API_FORCE_DIRECT !== 'true') {
+    return '/api/v1';
+  }
+
   const fromEnv =
     import.meta.env.VITE_API_BASE_URL?.trim() ||
     import.meta.env.VITE_API_URL?.trim();
   if (fromEnv) return fromEnv.replace(/\/$/, '');
 
-  // Same-origin /api proxy in the browser avoids CORS (dev, preview, and prod behind reverse proxy).
-  if (typeof window !== 'undefined') return '/api/v1';
-
-  if (import.meta.env.DEV) return '/api/v1';
-
+  // Vercel / static hosting has no /api proxy — always use Railway in production builds.
   return RAILWAY_API_BASE;
 }
 
