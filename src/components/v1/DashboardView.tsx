@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { 
   LayoutDashboard,
   TrendingUp, 
@@ -39,7 +39,10 @@ import {
   MessageSquareQuote,
   Flame,
   ArrowDownRight,
-  PackageCheck
+  PackageCheck,
+  Lock,
+  Unlock,
+  LogOut,
 } from 'lucide-react';
 import { 
   ResponsiveContainer, 
@@ -77,6 +80,7 @@ import {
   computeHourlyRushData,
   computeProductInsightsSummary,
   computeShiftCashierStats,
+  computeCashierLeaderboard,
   computeAIForecastData,
   computeWeekOverWeekChange,
   computeAverageDailySales,
@@ -85,7 +89,13 @@ import {
   buildDashboardStrategyHint,
   computeTodaySalesStats,
 } from '@/lib/analyticsCompute';
-import { getDashboardPersona, canToggleDashboardView, canSeeExecutiveDashboard } from '@/lib/rbac';
+import { getDashboardPersona, canToggleDashboardView, canSeeExecutiveDashboard, resolveUserPermissions } from '@/lib/rbac';
+import {
+  closeCashierShift,
+  getOpenCashierShift,
+  openCashierShift,
+  type CashierShiftSession,
+} from '@/lib/cashierShiftStore';
 import { TodaySalesHeroKpi } from '@/components/v1/TodaySalesHeroKpi';
 
 interface DashboardViewProps {
@@ -132,6 +142,61 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   const initialMode = persona === 'cashier' || !showExecutive ? 'cashier_shift' : 'executive';
   const [viewMode, setViewMode] = useState<'executive' | 'cashier_shift'>(initialMode);
+
+  const tenantId = currentUser?.businessId || currentUser?.id || 'local';
+  const staffKey = currentUser?.staffId || currentUser?.id || currentUser?.email || 'anon';
+  const [openShift, setOpenShift] = useState<CashierShiftSession | null>(null);
+  const [openingFloat, setOpeningFloat] = useState('0');
+  const [closingCash, setClosingCash] = useState('');
+  const [shiftMsg, setShiftMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    setOpenShift(getOpenCashierShift(tenantId, staffKey));
+  }, [tenantId, staffKey, currentUser?.id]);
+
+  useEffect(() => {
+    setViewMode(persona === 'cashier' || !showExecutive ? 'cashier_shift' : 'executive');
+  }, [persona, showExecutive]);
+
+  const perms = resolveUserPermissions(currentUser);
+  const canViewStock = perms.canViewInventory || perms.canModifyInventory;
+  const canEditStock = perms.canModifyInventory;
+
+  const refreshShift = useCallback(() => {
+    setOpenShift(getOpenCashierShift(tenantId, staffKey));
+  }, [tenantId, staffKey]);
+
+  const handleOpenShift = () => {
+    const session = openCashierShift({
+      tenantId,
+      staffId: staffKey,
+      cashierName: currentUser?.name || 'Cashier',
+      openingFloat: Number(openingFloat) || 0,
+    });
+    setOpenShift(session);
+    setShiftMsg(isSw ? 'Zamu imefunguliwa. Unaweza kuuza sasa.' : 'Shift opened. You can sell now.');
+  };
+
+  const handleCloseShift = () => {
+    if (!openShift) return;
+    closeCashierShift({
+      tenantId,
+      staffId: staffKey,
+      closingCashCounted: Number(closingCash) || undefined,
+    });
+    setOpenShift(null);
+    setClosingCash('');
+    setShiftMsg(isSw ? 'Zamu imefungwa. Fungua tena kabla ya POS.' : 'Shift closed. Open again before POS.');
+    refreshShift();
+  };
+
+  const goPos = () => {
+    if (persona === 'cashier' && !openShift) {
+      setShiftMsg(isSw ? 'Fungua zamu kwanza kabla ya POS.' : 'Open your shift before using POS.');
+      return;
+    }
+    onNavigate('pos');
+  };
   
   // Time range filter for Executive Chart
   const [chartTimeRange, setChartTimeRange] = useState<'7d' | '30d' | 'quarter'>('7d');
@@ -206,12 +271,32 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     [products, sales, customers, isSw],
   );
 
-  const shiftCashierStats = useMemo(
-    () => computeShiftCashierStats(sales, currentUser?.name),
-    [sales, currentUser?.name],
-  );
+  const shiftCashierStats = useMemo(() => {
+    const mine = computeShiftCashierStats(sales, currentUser?.name, {
+      mineOnly: persona === 'cashier',
+    });
+    // Fallback: if tagged-name filter yields nothing, show today's completed sales so KPIs aren't blank.
+    if (persona === 'cashier' && mine.receiptsIssued === 0) {
+      return computeShiftCashierStats(sales, currentUser?.name, { mineOnly: false });
+    }
+    return mine;
+  }, [sales, currentUser?.name, persona]);
 
-  const todaySalesStats = useMemo(() => computeTodaySalesStats(sales), [sales]);
+  const todaySalesStats = useMemo(() => {
+    const mine = computeTodaySalesStats(sales, {
+      cashierName: currentUser?.name,
+      mineOnly: persona === 'cashier',
+    });
+    if (persona === 'cashier' && mine.todayReceiptCount === 0) {
+      return computeTodaySalesStats(sales, { cashierName: currentUser?.name, mineOnly: false });
+    }
+    return mine;
+  }, [sales, currentUser?.name, persona]);
+
+  const cashierLeaderboard = useMemo(
+    () => computeCashierLeaderboard(sales),
+    [sales],
+  );
 
   const dashboardTitle = useMemo(() => {
     if (persona === 'cashier') return isSw ? 'Dashibodi ya Keshia' : 'Cashier Shift Dashboard';
@@ -225,7 +310,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const avgDailySales = useMemo(() => computeAverageDailySales(activeSalesData), [activeSalesData]);
 
   const handleExportDashboard = () => {
-    const totalVatCollected = Math.round(totalSalesRevenue * (0.18 / 1.18));
+    const totalVatCollected = sales.reduce((acc, s) => acc + (s.vatAmount || 0), 0);
     exportSalesReport({
       provider: {
         businessName: currentUser?.businessName || 'Duka+ Business',
@@ -243,7 +328,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         customer: s.customerName || (isSw ? 'Mteja wa Taslimu' : 'Walk-in'),
         date: s.date,
         method: (s.payments?.[0]?.method || s.type || '').toUpperCase(),
-        vat: formatTSh(s.vatAmount || Math.round(s.total * (0.18 / 1.18))),
+        vat: formatTSh(s.vatAmount || 0),
         total: formatTSh(s.total),
       })),
       totalGross: formatTSh(totalSalesRevenue),
@@ -1549,185 +1634,259 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       {/* 3. CASHIER / STAFF SHIFT MODE SECTION */}
       {/* ========================================================================= */}
       {viewMode === 'cashier_shift' && (
-        <div className="space-y-6">
-          {/* Cashier: Hero today sales on right, shift banner + actions below */}
-          <div className="flex flex-col lg:flex-row lg:justify-end gap-4">
-            <div className="flex-1 order-2 lg:order-1">
-          {/* Cashier Shift Header Banner */}
-          <div className="bg-gradient-to-r from-[#1E2244] via-[#2A3060] to-[#3B4278] rounded-2xl p-6 text-white shadow-md border border-white/10 h-full">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-300">
-                    <ShoppingBag className="w-5 h-5" />
-                  </span>
-                  <h3 className="text-xl font-black text-white">
-                    {shiftCashierStats.cashierName} • {shiftCashierStats.shiftName}
-                  </h3>
-                </div>
-                <p className="text-xs text-slate-300 mt-1">
-                  {currentUser?.location || businessLabel} • {isSw ? 'Mauzo ya leo' : 'Today\'s sales'}: <strong className="text-emerald-400">{formatTSh(shiftCashierStats.shiftSalesTotal)}</strong>
-                </p>
+        <div className="space-y-5">
+          {shiftMsg && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
+              {shiftMsg}
+            </div>
+          )}
+
+          {/* Shift gate strip */}
+          <div
+            className={`rounded-2xl border p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+              openShift
+                ? 'bg-emerald-50 border-emerald-200'
+                : 'bg-rose-50 border-rose-200'
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <div className={`p-2 rounded-xl ${openShift ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                {openShift ? <Unlock className="w-5 h-5" /> : <Lock className="w-5 h-5" />}
               </div>
-
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => onNavigate('pos')}
-                  className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-white text-xs font-black shadow-md flex items-center gap-2 transition-all cursor-pointer"
-                >
-                  <ShoppingBag className="w-4 h-4" />
-                  <span>Uza Bidhaa Sasa (Fungua POS)</span>
-                </button>
-
-                <button
-                  onClick={() => onNavigate('expenses-payroll')}
-                  className="px-3.5 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold border border-white/20 transition-all cursor-pointer"
-                >
-                  {isSw ? 'Fedha & Posho →' : 'Finance Hub →'}
-                </button>
+              <div>
+                <div className="text-sm font-extrabold text-[#323130]">
+                  {openShift
+                    ? (isSw ? 'Zamu ikiwa wazi' : 'Shift is open')
+                    : (isSw ? 'Zamu imefungwa — fungua kabla ya kuuza' : 'Shift closed — open before selling')}
+                </div>
+                <div className="text-[11px] text-[#605E5C] mt-0.5">
+                  {openShift
+                    ? `${isSw ? 'Ilifunguliwa' : 'Opened'}: ${new Date(openShift.openedAt).toLocaleString()} · ${isSw ? 'Float' : 'Float'}: ${formatTSh(openShift.openingFloat)}`
+                    : (isSw
+                      ? 'Lazima ufungue zamu ili POS ifanye kazi.'
+                      : 'You must open a shift before POS will work.')}
+                </div>
               </div>
             </div>
-
-            {/* Shift Matrix */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5 pt-5 border-t border-white/10">
-              <div className="bg-white/5 rounded-xl p-3 border border-white/10">
-                <span className="text-[11px] text-slate-300 font-medium">Mauzo ya Zamu Hii</span>
-                <span className="text-lg font-black text-emerald-400 block mt-0.5">{formatTSh(shiftCashierStats.shiftSalesTotal)}</span>
-                <span className="text-[10px] text-slate-400 font-bold">Lengo: {formatTSh(shiftCashierStats.shiftTarget)} (85%)</span>
-              </div>
-
-              <div className="bg-white/5 rounded-xl p-3 border border-white/10">
-                <span className="text-[11px] text-slate-300 font-medium">Stakabadhi Zilizotolewa</span>
-                <span className="text-lg font-black text-white block mt-0.5">{shiftCashierStats.receiptsIssued} risiti</span>
-                <span className="text-[10px] text-emerald-300 font-bold">
-                  {taxSettings.mode === 'tra_efd' ? 'TRA EFD' : (isSw ? 'Risiti ya Ndani' : 'Internal receipt')}
-                </span>
-              </div>
-
-              <div className="bg-white/5 rounded-xl p-3 border border-white/10">
-                <span className="text-[11px] text-slate-300 font-medium">Pesa Taslimu Drooni (Cash)</span>
-                <span className="text-lg font-black text-amber-300 block mt-0.5">{formatTSh(shiftCashierStats.cashDrawerBalance)}</span>
-                <span className="text-[10px] text-slate-400 font-bold">Tayari kwa Makabidhiano</span>
-              </div>
-
-              <div className="bg-white/5 rounded-xl p-3 border border-white/10">
-                <span className="text-[11px] text-slate-300 font-medium">Simu ya M-Pesa / Airtel</span>
-                <span className="text-lg font-black text-sky-300 block mt-0.5">{formatTSh(shiftCashierStats.mpesaCollected + shiftCashierStats.airtelCollected)}</span>
-                <span className="text-[10px] text-slate-400 font-bold">Kwenye Akaunti ya Duka</span>
-              </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {!openShift ? (
+                <>
+                  <input
+                    type="number"
+                    min={0}
+                    value={openingFloat}
+                    onChange={e => setOpeningFloat(e.target.value)}
+                    placeholder={isSw ? 'Float ya kuanza' : 'Opening float'}
+                    className="w-28 px-2 py-1.5 rounded-lg border border-[#E1DFDD] text-xs bg-white"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleOpenShift}
+                    className="px-3 py-2 rounded-xl bg-[#0F2347] text-white text-xs font-bold cursor-pointer"
+                  >
+                    {isSw ? 'Fungua Zamu' : 'Open Shift'}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <input
+                    type="number"
+                    min={0}
+                    value={closingCash}
+                    onChange={e => setClosingCash(e.target.value)}
+                    placeholder={isSw ? 'Hesabu cash' : 'Count cash'}
+                    className="w-28 px-2 py-1.5 rounded-lg border border-[#E1DFDD] text-xs bg-white"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleCloseShift}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-600 text-white text-xs font-bold cursor-pointer"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    {isSw ? 'Funga Zamu' : 'Close Shift'}
+                  </button>
+                </>
+              )}
             </div>
           </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-[1.4fr_1fr] gap-4">
+            <div className="rounded-2xl bg-[#0F2347] text-white p-5 shadow-md border border-[#0F2347]">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-[11px] uppercase tracking-wider text-white/60 font-bold">
+                    {isSw ? 'Dashibodi ya Keshia' : 'Cashier dashboard'}
+                  </div>
+                  <h3 className="text-xl font-black mt-1">
+                    {shiftCashierStats.cashierName}
+                    <span className="text-white/50 font-semibold text-sm"> · {shiftCashierStats.shiftName}</span>
+                  </h3>
+                  <p className="text-xs text-white/70 mt-1">
+                    {currentUser?.location || businessLabel}
+                    {taxSettings.mode === 'tra_efd' ? ' · TRA EFD' : ''}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={goPos}
+                  disabled={!openShift && persona === 'cashier'}
+                  className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-black shadow-md inline-flex items-center gap-2 cursor-pointer"
+                >
+                  <ShoppingBag className="w-4 h-4" />
+                  {isSw ? 'Uza Sasa (POS)' : 'Sell now (POS)'}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mt-5">
+                {[
+                  { label: isSw ? 'Mauzo leo' : 'Sales today', value: formatTSh(shiftCashierStats.shiftSalesTotal), sub: `${shiftCashierStats.receiptsIssued} ${isSw ? 'risiti' : 'receipts'}` },
+                  { label: 'Cash', value: formatTSh(shiftCashierStats.cashDrawerBalance), sub: isSw ? 'Droo' : 'Drawer' },
+                  { label: 'M-Pesa / Airtel', value: formatTSh(shiftCashierStats.mpesaCollected + shiftCashierStats.airtelCollected), sub: isSw ? 'Simu' : 'Mobile' },
+                  { label: isSw ? 'Lengo' : 'Target', value: formatTSh(shiftCashierStats.shiftTarget), sub: shiftCashierStats.shiftTarget > 0 ? `${Math.min(100, Math.round((shiftCashierStats.shiftSalesTotal / shiftCashierStats.shiftTarget) * 100))}%` : '—' },
+                ].map(k => (
+                  <div key={k.label} className="rounded-xl bg-white/8 border border-white/10 p-3">
+                    <div className="text-[10px] text-white/60 font-semibold uppercase tracking-wide">{k.label}</div>
+                    <div className="text-base font-black mt-1 tabular-nums">{k.value}</div>
+                    <div className="text-[10px] text-emerald-300/90 mt-0.5">{k.sub}</div>
+                  </div>
+                ))}
+              </div>
             </div>
+
             <TodaySalesHeroKpi
               stats={todaySalesStats}
               isSw={isSw}
               variant="staff"
               staffName={shiftCashierStats.cashierName}
-              onClick={() => onNavigate('pos')}
-              className="w-full lg:w-[380px] shrink-0 order-1 lg:order-2"
+              onClick={goPos}
+              className="w-full"
             />
           </div>
 
-          {/* Cashier Quick Actions & Inventory Lookups */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="bg-white rounded-2xl p-5 border border-[#E1DFDD] shadow-xs">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-white rounded-2xl p-4 border border-[#E1DFDD] shadow-xs">
               <h4 className="font-bold text-sm text-[#323130] mb-3 flex items-center gap-2">
                 <Zap className="w-4 h-4 text-amber-500" />
-                <span>Njia za Mkato za Mhudumu (Quick Shift Actions)</span>
+                {isSw ? 'Vitendo vya haraka' : 'Quick actions'}
               </h4>
-
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  onClick={() => onNavigate('pos')}
-                  className="p-3.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-left transition-all group"
-                >
-                  <ShoppingBag className="w-5 h-5 text-emerald-600 mb-1.5 group-hover:scale-110 transition-transform" />
-                  <div className="font-bold text-xs text-[#323130]">Mauzo Mapya ya POS</div>
-                  <div className="text-[11px] text-[#605E5C]">Kamera ya QR & Barcode</div>
+              <div className="grid grid-cols-2 gap-2.5">
+                <button type="button" onClick={goPos} className="p-3 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-left cursor-pointer">
+                  <ShoppingBag className="w-5 h-5 text-emerald-600 mb-1" />
+                  <div className="font-bold text-xs">{isSw ? 'POS' : 'POS sale'}</div>
                 </button>
-
-                <button
-                  onClick={() => onNavigate('inventory')}
-                  className="p-3.5 rounded-xl bg-blue-50 hover:bg-blue-100 border border-blue-200 text-left transition-all group"
-                >
-                  <Boxes className="w-5 h-5 text-blue-600 mb-1.5 group-hover:scale-110 transition-transform" />
-                  <div className="font-bold text-xs text-[#323130]">{isSw ? 'Kagua Bei & Stoo' : 'Check Prices & Stock'}</div>
-                  <div className="text-[11px] text-[#605E5C]">{isSw ? `Tafuta ${stockNoun.toLowerCase()} kwenye stoo` : `Search ${stockNoun.toLowerCase()} in inventory`}</div>
+                {canViewStock && (
+                  <button type="button" onClick={() => onNavigate('inventory')} className="p-3 rounded-xl bg-blue-50 hover:bg-blue-100 border border-blue-200 text-left cursor-pointer">
+                    <Boxes className="w-5 h-5 text-blue-600 mb-1" />
+                    <div className="font-bold text-xs">{isSw ? canEditStock ? 'Stoo' : 'Angalia stoo' : canEditStock ? 'Inventory' : 'View stock'}</div>
+                    {!canEditStock && <div className="text-[10px] text-[#605E5C]">{isSw ? 'Soma tu' : 'Read-only'}</div>}
+                  </button>
+                )}
+                <button type="button" onClick={() => onNavigate('customers')} className="p-3 rounded-xl bg-violet-50 hover:bg-violet-100 border border-violet-200 text-left cursor-pointer">
+                  <Users className="w-5 h-5 text-violet-600 mb-1" />
+                  <div className="font-bold text-xs">{isSw ? 'Wateja' : 'Customers'}</div>
                 </button>
-
-                <button
-                  onClick={() => onNavigate('customers')}
-                  className="p-3.5 rounded-xl bg-purple-50 hover:bg-purple-100 border border-purple-200 text-left transition-all group"
-                >
-                  <Users className="w-5 h-5 text-purple-600 mb-1.5 group-hover:scale-110 transition-transform" />
-                  <div className="font-bold text-xs text-[#323130]">Tafuta Mteja / Deni</div>
-                  <div className="text-[11px] text-[#605E5C]">Kikomo cha mkopo</div>
-                </button>
-
-                <button
-                  onClick={() => onNavigate('expenses-payroll')}
-                  className="p-3.5 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-200 text-left transition-all group"
-                >
-                  <Wallet className="w-5 h-5 text-amber-600 mb-1.5 group-hover:scale-110 transition-transform" />
-                  <div className="font-bold text-xs text-[#323130]">Posho & Mkopo wa Dharura</div>
-                  <div className="text-[11px] text-[#605E5C]">Stipends & Advances</div>
+                <button type="button" onClick={() => onNavigate('transaction-history')} className="p-3 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-left cursor-pointer">
+                  <Clock className="w-5 h-5 text-slate-600 mb-1" />
+                  <div className="font-bold text-xs">{isSw ? 'Historia' : 'History'}</div>
                 </button>
               </div>
             </div>
 
-            {/* Live Fast Low Stock items near cash counter */}
-            <div className="bg-white rounded-2xl p-5 border border-[#E1DFDD] shadow-xs">
+            <div className="bg-white rounded-2xl p-4 border border-[#E1DFDD] shadow-xs">
               <div className="flex items-center justify-between mb-3">
                 <h4 className="font-bold text-sm text-[#323130] flex items-center gap-2">
                   <AlertTriangle className="w-4 h-4 text-rose-500" />
-                  <span>{isSw ? `${productNoun} Zinazokaribia Kuisha` : 'Low Stock Items'}</span>
+                  {isSw ? 'Stoo chini' : 'Low stock'}
                 </h4>
-                <span className="text-xs text-rose-600 font-bold">{lowStockProducts.length} vitu</span>
+                <span className="text-xs text-rose-600 font-bold">{lowStockProducts.length}</span>
               </div>
-
               <div className="space-y-2">
                 {lowStockProducts.length === 0 ? (
-                  <div className="p-4 text-center text-xs text-[#605E5C] rounded-xl bg-emerald-50/50 border border-emerald-100">
-                    {isSw ? 'Akiba yote iko salama kwa sasa.' : 'All stock levels look healthy.'}
+                  <div className="p-3 text-center text-xs text-[#605E5C] rounded-xl bg-emerald-50 border border-emerald-100">
+                    {isSw ? 'Akiba salama.' : 'Stock looks healthy.'}
                   </div>
-                ) : lowStockProducts.slice(0, 3).map((prod) => (
-                  <div key={prod.id} className="p-2.5 rounded-xl bg-rose-50/50 border border-rose-100 flex items-center justify-between text-xs">
-                    <div>
-                      <div className="font-bold text-[#323130]">{prod.name}</div>
-                      <div className="text-[11px] text-[#605E5C]">SKU: {prod.sku} • {prod.category}</div>
+                ) : (
+                  lowStockProducts.slice(0, 4).map(prod => (
+                    <div key={prod.id} className="p-2 rounded-xl bg-rose-50/60 border border-rose-100 flex justify-between text-xs gap-2">
+                      <div className="min-w-0">
+                        <div className="font-bold text-[#323130] truncate">{prod.name}</div>
+                        <div className="text-[10px] text-[#605E5C]">{prod.sku}</div>
+                      </div>
+                      <div className="font-bold text-rose-700 shrink-0">{prod.stock} {prod.unit}</div>
                     </div>
-                    <div className="text-right">
-                      <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 font-bold text-[11px]">
-                        Zimebaki {prod.stock} {prod.unit}
-                      </span>
-                    </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
-
-              <div className="mt-3 pt-3 border-t border-[#F3F2F1]">
+              {canViewStock && (
                 <button
+                  type="button"
                   onClick={() => onNavigate('inventory')}
-                  className="w-full py-2 rounded-lg bg-[#F3F2F1] hover:bg-[#EDEBE9] text-[#6264A7] text-xs font-bold transition-colors"
+                  className="mt-3 w-full py-2 rounded-lg bg-[#F3F2F1] text-[#0F2347] text-xs font-bold cursor-pointer"
                 >
-                  Angalia Orodha Kamili ya Stoo →
+                  {isSw ? 'Orodha ya stoo →' : 'Full stock list →'}
                 </button>
-              </div>
+              )}
             </div>
           </div>
         </div>
       )}
 
-      {/* FULL WIDTH ACTION BAR */}
+      {/* Owner/manager: cashier performance board */}
+      {viewMode === 'executive' && (persona === 'owner' || persona === 'manager') && (
+        <div className="bg-white rounded-2xl border border-[#E1DFDD] shadow-xs p-4">
+          <h4 className="font-bold text-sm text-[#323130] mb-3 flex items-center gap-2">
+            <Award className="w-4 h-4 text-amber-500" />
+            {isSw ? 'Utendaji wa makeshia leo' : "Today's cashier performance"}
+          </h4>
+          {cashierLeaderboard.length === 0 ? (
+            <p className="text-xs text-[#605E5C]">{isSw ? 'Hakuna mauzo ya makeshia leo bado.' : 'No cashier sales recorded yet today.'}</p>
+          ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-left text-[#605E5C] border-b border-[#EDEBE9]">
+                  <th className="py-2 pr-2">{isSw ? 'Keshia' : 'Cashier'}</th>
+                  <th className="py-2 pr-2">{isSw ? 'Risiti' : 'Receipts'}</th>
+                  <th className="py-2 pr-2">Cash</th>
+                  <th className="py-2 pr-2">{isSw ? 'Simu' : 'Mobile'}</th>
+                  <th className="py-2 text-right">{isSw ? 'Jumla' : 'Revenue'}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cashierLeaderboard.slice(0, 8).map(row => (
+                  <tr key={row.cashierName} className="border-b border-[#F3F2F1]">
+                    <td className="py-2 pr-2 font-semibold text-[#323130]">{row.cashierName}</td>
+                    <td className="py-2 pr-2">{row.receipts}</td>
+                    <td className="py-2 pr-2">{formatTSh(row.cash)}</td>
+                    <td className="py-2 pr-2">{formatTSh(row.mobile)}</td>
+                    <td className="py-2 text-right font-bold text-emerald-700">{formatTSh(row.revenue)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          )}
+        </div>
+      )}
+
+      {/* FULL WIDTH ACTION BAR — role-aware */}
       <ActionBar
         language={language}
-        onAdd={() => onNavigate('pos')}
-        onEdit={() => onNavigate('inventory')}
-        onView={() => onNavigate('bi-analytics')}
+        onAdd={goPos}
+        onEdit={canEditStock ? () => onNavigate('inventory') : canViewStock ? () => onNavigate('inventory') : undefined}
+        onView={() => onNavigate('transaction-history')}
         onAISuggest={onOpenAIChat}
-        onExport={handleExportDashboard}
-        customAddLabel={isSw ? '➕ Mauzo Mapya (POS)' : '➕ New POS Sale'}
-        totalCount={sales.length}
+        onExport={persona === 'cashier' ? undefined : handleExportDashboard}
+        customAddLabel={isSw ? '➕ Mauzo (POS)' : '➕ POS Sale'}
+        customEditLabel={
+          canEditStock
+            ? (isSw ? 'Stoo' : 'Inventory')
+            : canViewStock
+              ? (isSw ? 'Angalia stoo' : 'View stock')
+              : undefined
+        }
+        customViewLabel={isSw ? 'Historia' : 'History'}
+        totalCount={shiftCashierStats.receiptsIssued || sales.length}
       />
     </div>
   );

@@ -24,15 +24,23 @@ import {
   Clock,
   ArrowRight,
   Send,
-  Info
+  Info,
+  Lock,
+  Unlock,
 } from 'lucide-react';
 import { CartItem, Customer, Language, PaymentMethod, Product, SaleTransaction, BusinessType, AuthUser } from '@/types/v1';
 import { formatTSh, getTranslation } from '@/utils/translations';
 import { getWorkplace } from '@/lib/businessProfiles';
 import { productMatchesSearch } from '@/lib/productMetaDisplay';
 import { ProductMetaBadges } from '@/components/v1/ProductMetaBadges';
+import { ProductImageThumb } from '@/components/v1/ProductImage';
 import { POSQRScannerModal } from '@/components/v1/POSQRScannerModal';
-import { useTaxCompliance } from '@/context/TaxComplianceContext';
+import { useEffectiveTaxCompliance } from '@/context/TaxComplianceContext';
+import { useTraReceipts } from '@/context/TraReceiptContext';
+import type { TraReceipt } from '@/types/traReceipt';
+import { useDocumentTemplates } from '@/context/DocumentTemplateContext';
+import { printDocument } from '@/lib/documentRenderer';
+import { saleReceiptRenderData } from '@/lib/documentDataMappers';
 import {
   calculateSaleTotals,
   formatVatLabel,
@@ -41,9 +49,10 @@ import {
   computeDiscountedSubtotal,
   capDiscountPercent,
   effectiveUnitPrice,
+  isVatActive,
 } from '@/lib/taxComplianceSettings';
 import { computeSaleDiscountAmount, saleGrossSubtotal } from '@/lib/saleDiscountUtils';
-import { resolvePosPricingAccess } from '@/lib/rbac';
+import { resolvePosPricingAccess, getDashboardPersona } from '@/lib/rbac';
 import { api } from '@/lib/api';
 import { mapCustomer, customerToApiPayload, filterByBranchId } from '@/lib/apiSync';
 import {
@@ -54,6 +63,18 @@ import {
   generateClientTransactionId,
 } from '@/lib/transactionEngine';
 import confetti from 'canvas-confetti';
+import {
+  todayIsoDate,
+  defaultCreditDueDate,
+  validatePaymentDueDate,
+  formatDueDateDisplay,
+} from '@/lib/dueDate';
+import {
+  closeCashierShift,
+  getOpenCashierShift,
+  openCashierShift,
+  type CashierShiftSession,
+} from '@/lib/cashierShiftStore';
 
 interface POSViewProps {
   language: Language;
@@ -80,6 +101,7 @@ interface POSViewProps {
   tableContextLabel?: string;
   currentUser?: AuthUser | null;
   activeBranchId?: string | null;
+  branchVatRegistered?: boolean | null;
 }
 
 export const POSView: React.FC<POSViewProps> = ({
@@ -107,15 +129,31 @@ export const POSView: React.FC<POSViewProps> = ({
   tableContextLabel,
   currentUser,
   activeBranchId,
+  branchVatRegistered,
 }) => {
   const isSw = language === 'sw';
   const t = (key: any) => getTranslation(language, key);
   const workplace = getWorkplace(businessType, isSw ? 'sw' : 'en');
-  const { settings: taxSettings } = useTaxCompliance();
+  const taxSettings = useEffectiveTaxCompliance(activeBranchId, branchVatRegistered);
+  const vatActive = isVatActive(taxSettings);
+  const { issueFromSale } = useTraReceipts();
+  const { config, getActive } = useDocumentTemplates();
   const pricing = useMemo(
     () => resolvePosPricingAccess(currentUser, taxSettings),
     [currentUser, taxSettings],
   );
+
+  const tenantKey = tenantId || currentUser?.businessId || currentUser?.id || 'local';
+  const staffKey = currentUser?.staffId || currentUser?.id || currentUser?.email || 'anon';
+  const requiresOpenShift = getDashboardPersona(currentUser ?? null) === 'cashier';
+  const [openShift, setOpenShift] = useState<CashierShiftSession | null>(() =>
+    typeof window !== 'undefined' ? getOpenCashierShift(tenantKey, staffKey) : null,
+  );
+  const [openingFloat, setOpeningFloat] = useState('0');
+
+  useEffect(() => {
+    setOpenShift(getOpenCashierShift(tenantKey, staffKey));
+  }, [tenantKey, staffKey]);
 
   const branchCustomers = useMemo(
     () => filterByBranchId(customers, activeBranchId),
@@ -185,6 +223,8 @@ export const POSView: React.FC<POSViewProps> = ({
   const [paymentMode, setPaymentMode] = useState<'full' | 'partial' | 'credit'>('full');
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethod>('cash');
   const [amountPaidInput, setAmountPaidInput] = useState<string>('');
+  const [cartDiscountPercent, setCartDiscountPercent] = useState<number>(0);
+  const [paymentDueDate, setPaymentDueDate] = useState<string>('');
 
   React.useEffect(() => {
     if (!pricing.canUsePartialPayment && paymentMode !== 'full') {
@@ -193,6 +233,7 @@ export const POSView: React.FC<POSViewProps> = ({
   }, [pricing.canUsePartialPayment, paymentMode]);
   
   const [lastCompletedSale, setLastCompletedSale] = useState<SaleTransaction | null>(null);
+  const [lastTraReceipt, setLastTraReceipt] = useState<TraReceipt | null>(null);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
 
   // New Customer On-The-Fly Modal State
@@ -276,25 +317,6 @@ export const POSView: React.FC<POSViewProps> = ({
     draft.clientTransactionId = openDraftIdRef.current;
     upsertOpenTransaction(tenantId, draft);
   }, [tenantId, cart, selectedCustomer, selectedCustomerId, paymentMode, selectedPaymentMethod, amountPaidInput]);
-
-  const buildCurrentSale = useCallback(
-    (finalize: boolean, clientTransactionId?: string) =>
-      buildSaleFromCart({
-        cart,
-        customer: selectedCustomer,
-        paymentMode,
-        paymentMethod: selectedPaymentMethod,
-        amountPaid: Number(amountPaidInput) || 0,
-        taxSettings,
-        cashierName,
-        clientTransactionId: clientTransactionId ?? openDraftIdRef.current ?? undefined,
-        finalize,
-        isSw,
-        branchId: activeBranchId ?? undefined,
-        receiptNumber: finalize ? generateReceiptNumber(taxSettings) : undefined,
-      }),
-    [cart, selectedCustomer, paymentMode, selectedPaymentMethod, amountPaidInput, taxSettings, cashierName, isSw, activeBranchId],
-  );
 
   // Flash warning helper
   const triggerStockWarning = (msg: string) => {
@@ -429,7 +451,9 @@ export const POSView: React.FC<POSViewProps> = ({
     })),
     taxSettings,
   );
-  const saleTotals = calculateSaleTotals({ subtotal, discountPercent: 0 }, taxSettings);
+  const effectiveCartDiscount =
+    taxSettings.cartDiscountEnabled && pricing.canApplyDiscount ? cartDiscountPercent : 0;
+  const saleTotals = calculateSaleTotals({ subtotal, discountPercent: effectiveCartDiscount }, taxSettings);
   const vatAmount = saleTotals.vatAmount;
   const total = saleTotals.total;
 
@@ -443,13 +467,52 @@ export const POSView: React.FC<POSViewProps> = ({
 
   // Check if credit / partial requires customer selection
   const isCreditOrPartial = paymentMode === 'credit' || (paymentMode === 'partial' && balanceRemaining > 0);
+  const needsDueDate =
+    pricing.canUsePartialPayment &&
+    (paymentMode === 'credit' || (paymentMode === 'partial' && balanceRemaining > 0));
   const isCustomerMissingForCredit = isCreditOrPartial && !selectedCustomer;
+
+  React.useEffect(() => {
+    if (needsDueDate && !paymentDueDate) {
+      setPaymentDueDate(defaultCreditDueDate(30));
+    } else if (!needsDueDate) {
+      setPaymentDueDate('');
+    }
+  }, [needsDueDate, paymentDueDate]);
+
+  const buildCurrentSale = useCallback(
+    (finalize: boolean, clientTransactionId?: string) =>
+      buildSaleFromCart({
+        cart,
+        customer: selectedCustomer,
+        paymentMode,
+        paymentMethod: selectedPaymentMethod,
+        amountPaid: Number(amountPaidInput) || 0,
+        taxSettings,
+        cashierName,
+        clientTransactionId: clientTransactionId ?? openDraftIdRef.current ?? undefined,
+        finalize,
+        isSw,
+        branchId: activeBranchId ?? undefined,
+        cartDiscountPercent: pricing.canApplyDiscount ? cartDiscountPercent : 0,
+        paymentDueDate: needsDueDate ? paymentDueDate : undefined,
+        receiptNumber: finalize ? generateReceiptNumber(taxSettings) : undefined,
+      }),
+    [cart, selectedCustomer, paymentMode, selectedPaymentMethod, amountPaidInput, taxSettings, cashierName, isSw, activeBranchId, cartDiscountPercent, pricing.canApplyDiscount, needsDueDate, paymentDueDate],
+  );
 
   const handleSaveAndNext = async () => {
     setValidationError(null);
     if (cart.length === 0) {
       setValidationError(isSw ? 'Kikapu hakina bidhaa.' : 'Cart is empty.');
       return;
+    }
+    if (balanceRemaining > 0) {
+      const dueErr = validatePaymentDueDate(paymentDueDate, isSw);
+      if (dueErr) {
+        setValidationError(dueErr);
+        return;
+      }
     }
     if (!openDraftIdRef.current) {
       openDraftIdRef.current = generateClientTransactionId();
@@ -481,6 +544,7 @@ export const POSView: React.FC<POSViewProps> = ({
   const clearPosSession = () => {
     setCart([]);
     setAmountPaidInput('');
+    setPaymentDueDate('');
     setSelectedCustomerId('');
     openDraftIdRef.current = null;
     resumeSaleIdRef.current = null;
@@ -519,6 +583,14 @@ export const POSView: React.FC<POSViewProps> = ({
       }
     }
 
+    if (balanceRemaining > 0) {
+      const dueErr = validatePaymentDueDate(paymentDueDate, isSw);
+      if (dueErr) {
+        setValidationError(dueErr);
+        return;
+      }
+    }
+
     // 2. Double check stock constraints before committing
     for (const item of cart) {
       const liveProd = products.find(p => p.id === item.product.id);
@@ -540,6 +612,21 @@ export const POSView: React.FC<POSViewProps> = ({
       sale.payments[0].reference = `MP-${Math.random().toString(36).substring(7).toUpperCase()}`;
     }
 
+    const finishSale = async () => {
+      let traReceipt: TraReceipt | null = null;
+      if (vatActive && taxSettings.mode === 'tra_efd') {
+        traReceipt = await issueFromSale(
+          sale,
+          taxSettings.receiptBusinessName || currentUser?.businessName || 'Shop',
+          { customerMobile: selectedCustomer?.phone },
+        );
+      }
+      setLastTraReceipt(traReceipt);
+      setLastCompletedSale(sale);
+      clearPosSession();
+      confetti({ particleCount: 70, spread: 80, origin: { y: 0.6 } });
+    };
+
     if (resumeSaleIdRef.current && onFinalizeResume) {
       try {
         if (tenantId) {
@@ -548,9 +635,7 @@ export const POSView: React.FC<POSViewProps> = ({
           removeOpenTransaction(tenantId, resumeSaleIdRef.current);
         }
         await onFinalizeResume(resumeSaleIdRef.current, sale);
-        setLastCompletedSale(sale);
-        clearPosSession();
-        confetti({ particleCount: 70, spread: 80, origin: { y: 0.6 } });
+        await finishSale();
       } catch {
         setValidationError(isSw ? 'Imeshindikana kukamilisha mauzo.' : 'Failed to finalize pending sale.');
       }
@@ -564,14 +649,7 @@ export const POSView: React.FC<POSViewProps> = ({
     }
 
     onCompleteSale(sale);
-    setLastCompletedSale(sale);
-    clearPosSession();
-
-    confetti({
-      particleCount: 70,
-      spread: 80,
-      origin: { y: 0.6 },
-    });
+    await finishSale();
   };
 
   // Handler: Quick Create Customer from POS and Auto-Select
@@ -644,8 +722,74 @@ export const POSView: React.FC<POSViewProps> = ({
     });
   };
 
+  if (requiresOpenShift && !openShift) {
+    return (
+      <div className="max-w-lg mx-auto mt-10 rounded-2xl border border-rose-200 bg-rose-50 p-6 space-y-4">
+        <div className="flex items-start gap-3">
+          <div className="p-2 rounded-xl bg-rose-100 text-rose-700">
+            <Lock className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="text-lg font-black text-[#323130]">
+              {isSw ? 'Fungua zamu kabla ya POS' : 'Open your shift before POS'}
+            </h2>
+            <p className="text-xs text-[#605E5C] mt-1">
+              {isSw
+                ? 'Mauzo yanahitaji zamu iliyofunguliwa. Weka float ya kuanza kisha fungua.'
+                : 'Sales require an open shift. Enter opening float, then open your shift.'}
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="number"
+            min={0}
+            value={openingFloat}
+            onChange={e => setOpeningFloat(e.target.value)}
+            placeholder={isSw ? 'Float ya kuanza' : 'Opening float'}
+            className="w-36 px-3 py-2 rounded-xl border border-[#E1DFDD] text-sm bg-white"
+          />
+          <button
+            type="button"
+            onClick={() => {
+              const session = openCashierShift({
+                tenantId: tenantKey,
+                staffId: staffKey,
+                cashierName: cashierName || currentUser?.name || 'Cashier',
+                openingFloat: Number(openingFloat) || 0,
+              });
+              setOpenShift(session);
+            }}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#0F2347] text-white text-sm font-bold cursor-pointer"
+          >
+            <Unlock className="w-4 h-4" />
+            {isSw ? 'Fungua Zamu' : 'Open Shift'}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4 pb-12">
+      {requiresOpenShift && openShift && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <span className="font-semibold text-emerald-900 inline-flex items-center gap-1.5">
+            <Unlock className="w-3.5 h-3.5" />
+            {isSw ? 'Zamu wazi' : 'Shift open'} · {new Date(openShift.openedAt).toLocaleTimeString()}
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              closeCashierShift({ tenantId: tenantKey, staffId: staffKey });
+              setOpenShift(null);
+            }}
+            className="px-2.5 py-1 rounded-lg bg-rose-600 text-white font-bold cursor-pointer"
+          >
+            {isSw ? 'Funga Zamu' : 'Close Shift'}
+          </button>
+        </div>
+      )}
       {/* View Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
@@ -774,6 +918,9 @@ export const POSView: React.FC<POSViewProps> = ({
                   }`}
                 >
                   <div>
+                    <div className="mb-2 -mx-0.5 rounded-lg overflow-hidden border border-[#EDEBE9] bg-[#F3F2F1]">
+                      <ProductImageThumb src={prod.imageUrl} name={prod.name} size="card" />
+                    </div>
                     <div className="flex items-start justify-between gap-1 mb-1">
                       <span className="text-[10px] font-mono text-[#605E5C] bg-[#F3F2F1] px-1.5 py-0.5 rounded">
                         {prod.sku}
@@ -943,7 +1090,9 @@ export const POSView: React.FC<POSViewProps> = ({
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <div className="flex-1 pr-2">
+                        <div className="flex items-center gap-2 flex-1 pr-2 min-w-0">
+                          <ProductImageThumb src={item.product.imageUrl} name={item.product.name} size="sm" />
+                          <div className="min-w-0 flex-1">
                           <div className="font-bold text-[#323130] truncate">{item.product.name}</div>
                           <ProductMetaBadges
                             product={item.product}
@@ -957,6 +1106,7 @@ export const POSView: React.FC<POSViewProps> = ({
                             <span className="font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded">
                               Stoo: {availableStock}
                             </span>
+                          </div>
                           </div>
                         </div>
 
@@ -1051,7 +1201,20 @@ export const POSView: React.FC<POSViewProps> = ({
                 <span>{t('subtotal')}:</span>
                 <span className="font-semibold text-[#323130]">{formatTSh(subtotal)}</span>
               </div>
-              {taxSettings.vatEnabled && taxSettings.showVatOnReceipt && (
+              {taxSettings.cartDiscountEnabled && pricing.canApplyDiscount && (
+                <div className="flex justify-between items-center gap-2">
+                  <span>{isSw ? 'Punguzo la gari (%)' : 'Cart discount (%)'}:</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={taxSettings.maxDiscountPercent}
+                    value={cartDiscountPercent}
+                    onChange={e => setCartDiscountPercent(capDiscountPercent(Number(e.target.value) || 0, taxSettings))}
+                    className="w-16 px-2 py-0.5 border border-[#C8C6C4] rounded text-right font-semibold text-[#323130]"
+                  />
+                </div>
+              )}
+              {vatActive && taxSettings.showVatOnReceipt && (
                 <div className="flex justify-between">
                   <span>{formatVatLabel(taxSettings, isSw)}:</span>
                   <span className="font-semibold text-[#323130]">{formatTSh(vatAmount)}</span>
@@ -1139,6 +1302,36 @@ export const POSView: React.FC<POSViewProps> = ({
                       : `Remaining ${formatTSh(balanceRemaining)} will be posted to customer credit balance.`}
                   </div>
                 )}
+              </div>
+            )}
+
+            {needsDueDate && (
+              <div className="p-2 bg-orange-50/70 rounded-lg border border-orange-200 space-y-1">
+                <label className="block text-[11px] font-bold text-[#323130]">
+                  {isSw ? 'Tarehe ya Malipo (Due Date) *' : 'Payment Due Date *'}
+                </label>
+                <input
+                  type="date"
+                  required
+                  min={todayIsoDate()}
+                  value={paymentDueDate}
+                  onChange={e => {
+                    const next = e.target.value;
+                    if (next && validatePaymentDueDate(next, isSw)) {
+                      setValidationError(validatePaymentDueDate(next, isSw));
+                    } else {
+                      setValidationError(null);
+                    }
+                    setPaymentDueDate(next);
+                  }}
+                  className="w-full px-3 py-1.5 text-xs bg-white border border-[#EDEBE9] rounded-lg focus:border-[#0078D4] outline-none font-semibold"
+                />
+                <p className="text-[10px] text-[#605E5C]">
+                  {isSw
+                    ? 'Haiwezekani kuweka tarehe ya zamani. Inaonekana kwenye risiti, ankara, na ripoti za madeni.'
+                    : 'Past dates are not allowed. Shown on receipt, invoice, and receivables.'}
+                  {paymentDueDate ? ` · ${formatDueDateDisplay(paymentDueDate)}` : ''}
+                </p>
               </div>
             )}
 
@@ -1378,7 +1571,7 @@ export const POSView: React.FC<POSViewProps> = ({
               <span>SUBTOTAL (EXCL VAT):</span>
               <span>{formatTSh(lastCompletedSale.subtotal)}</span>
             </div>
-            {taxSettings.vatEnabled && taxSettings.showVatOnReceipt && (
+            {vatActive && taxSettings.showVatOnReceipt && (
               <div className="flex justify-between">
                 <span>{formatVatLabel(taxSettings, isSw).toUpperCase()}:</span>
                 <span>{formatTSh(lastCompletedSale.vatAmount)}</span>
@@ -1393,14 +1586,44 @@ export const POSView: React.FC<POSViewProps> = ({
               <span>{formatTSh(lastCompletedSale.paidAmount)}</span>
             </div>
             {lastCompletedSale.balanceRemaining > 0 && (
-              <div className="flex justify-between text-[#D13438] font-bold">
-                <span>POSTED TO CREDIT BALANCE:</span>
-                <span>{formatTSh(lastCompletedSale.balanceRemaining)}</span>
-              </div>
+              <>
+                <div className="flex justify-between text-[#D13438] font-bold">
+                  <span>POSTED TO CREDIT BALANCE:</span>
+                  <span>{formatTSh(lastCompletedSale.balanceRemaining)}</span>
+                </div>
+                {lastCompletedSale.paymentDueDate && (
+                  <div className="flex justify-between text-[#E65100] font-bold">
+                    <span>{isSw ? 'TAREHE YA MALIPO:' : 'PAYMENT DUE:'}</span>
+                    <span>{formatDueDateDisplay(lastCompletedSale.paymentDueDate)}</span>
+                  </div>
+                )}
+              </>
             )}
           </div>
 
-          {lastCompletedSale.traEfdSignature && taxSettings.mode === 'tra_efd' && (
+          {lastTraReceipt && taxSettings.mode === 'tra_efd' && (
+            <div className="pt-2 text-center text-[10px] text-[#605E5C] border-t border-[#EDEBE9] space-y-1">
+              <div className="font-mono">VERIFICATION: {lastTraReceipt.verificationCode}</div>
+              {lastTraReceipt.verificationQrDataUrl && (
+                <img
+                  src={lastTraReceipt.verificationQrDataUrl}
+                  alt="TRA QR"
+                  className="mx-auto w-20 h-20"
+                />
+              )}
+              {lastTraReceipt.verificationLink && (
+                <a
+                  href={lastTraReceipt.verificationLink}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[#0078D4] underline block truncate"
+                >
+                  {lastTraReceipt.verificationLink}
+                </a>
+              )}
+            </div>
+          )}
+          {!lastTraReceipt && lastCompletedSale.traEfdSignature && taxSettings.mode === 'tra_efd' && (
             <div className="pt-2 text-center text-[10px] text-[#605E5C] font-mono border-t border-[#EDEBE9]">
               SIGNATURE: {lastCompletedSale.traEfdSignature}
             </div>
@@ -1412,7 +1635,12 @@ export const POSView: React.FC<POSViewProps> = ({
           <div className="flex gap-2">
             <button
               onClick={() => {
-                alert('Printing official TRA thermal receipt...');
+                if (!lastCompletedSale) return;
+                const tpl = getActive('invoice');
+                const data = saleReceiptRenderData(lastCompletedSale, isSw, {
+                  showDiscount: taxSettings.showDiscountOnDocuments && taxSettings.discountEnabled,
+                });
+                printDocument(tpl, data, config.branding, isSw);
                 setLastCompletedSale(null);
               }}
               className="flex-1 py-2 rounded-lg bg-[#0078D4] hover:bg-[#006cbd] text-white font-semibold text-xs flex items-center justify-center gap-1.5 shadow-xs"

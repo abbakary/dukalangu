@@ -63,6 +63,8 @@ import { formatTSh, getTranslation } from '@/utils/translations';
 import { buildLocalCrossMatrixAnalysis } from '@/lib/analyticsCompute';
 import { api } from '@/lib/api';
 import { filterByBranchId } from '@/lib/apiSync';
+import { printHtmlPage } from '@/lib/documentRenderer';
+import { matrixReportHtml } from '@/lib/documentDataMappers';
 import { TerritoryLeafletMap, type TerritoryMapPoint } from '@/components/v1/TerritoryLeafletMap';
 
 const TZ_GEO_HINTS: Array<[string, number, number, string]> = [
@@ -1347,7 +1349,21 @@ export const ProductCustomerLocationAnalyticsView: React.FC<ProductCustomerLocat
 
             {/* Print / Export Button */}
             <button
-              onClick={() => window.print()}
+              onClick={() => {
+                const html = matrixReportHtml(
+                  filteredMetrics.map(m => ({
+                    productName: m.productName,
+                    productCategory: m.productCategory,
+                    customerName: m.customerName,
+                    customerLocation: m.customerLocation,
+                    unitsBought: m.unitsBought,
+                    totalSpent: m.totalSpent,
+                  })),
+                  isSw ? 'Duka+ Business' : 'Duka+ Business',
+                  isSw,
+                );
+                printHtmlPage(isSw ? 'Ripoti ya Jedwali' : 'Matrix Report', html, isSw);
+              }}
               className="flex items-center gap-2 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer self-start"
             >
               <Printer className="w-4 h-4" />

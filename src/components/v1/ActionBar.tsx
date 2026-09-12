@@ -11,6 +11,8 @@ interface ActionBarProps {
   onAISuggest?: () => void;
   onFilter?: () => void;
   customAddLabel?: string;
+  customEditLabel?: string;
+  customViewLabel?: string;
   exportLabel?: string;
   totalCount?: number;
   showExport?: boolean;
@@ -25,6 +27,8 @@ export const ActionBar: React.FC<ActionBarProps> = ({
   onAISuggest,
   onFilter,
   customAddLabel,
+  customEditLabel,
+  customViewLabel,
   exportLabel,
   totalCount,
   showExport = true,
@@ -46,12 +50,12 @@ export const ActionBar: React.FC<ActionBarProps> = ({
         )}
         {onEdit && (
           <button type="button" onClick={onEdit} className="px-3 py-2 rounded-xl border border-[#E1DFDD] text-xs font-semibold text-[#323130] hover:bg-[#F3F2F1] cursor-pointer">
-            {isSw ? 'Hariri' : 'Edit'}
+            {customEditLabel ?? (isSw ? 'Hariri' : 'Edit')}
           </button>
         )}
         {onView && (
           <button type="button" onClick={onView} className="px-3 py-2 rounded-xl border border-[#E1DFDD] text-xs font-semibold text-[#323130] hover:bg-[#F3F2F1] cursor-pointer">
-            {isSw ? 'Angalia' : 'View'}
+            {customViewLabel ?? (isSw ? 'Angalia' : 'View')}
           </button>
         )}
         {onFilter && (

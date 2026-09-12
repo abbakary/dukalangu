@@ -44,6 +44,10 @@ import { ActionBar } from '@/components/v1/ActionBar';
 import { CategoryTaxonomyPicker, type CategorySelection } from '@/components/v1/CategoryTaxonomyPicker';
 import { ProductMetaBadges } from '@/components/v1/ProductMetaBadges';
 import { DynamicProductForm, type DynamicProductFormValues } from '@/components/v1/DynamicProductForm';
+import { UnitPicker } from '@/components/v1/UnitPicker';
+import { useDocumentTemplates } from '@/context/DocumentTemplateContext';
+import { printDocument } from '@/lib/documentRenderer';
+import { poToGrnRenderData } from '@/lib/documentDataMappers';
 import { getWorkplace } from '@/lib/businessProfiles';
 import {
   getDefaultMainCategory,
@@ -56,6 +60,20 @@ import confetti from 'canvas-confetti';
 import { api } from '@/lib/api';
 import { mapSupplier, mapPurchaseOrder, mapEvent, optionalApiDate, supplierToApiPayload, eventToApiPayload, filterByBranchId, filterPurchaseOrdersByBranch } from '@/lib/apiSync';
 import { exportProcurementReport } from '@/utils/reportGenerator';
+import {
+  PURCHASE_TAX_OPTIONS,
+  applyPurchaseVatScopeToItems,
+  computePurchaseOrderTotals,
+  normalizePurchaseOrderItem,
+  purchaseTaxRate,
+  purchaseVatScopeLabel,
+  resolveLineTaxIdForScope,
+  type PurchaseTaxId,
+  type PurchaseVatScope,
+} from '@/lib/purchaseTax';
+import { useTaxCompliance } from '@/context/TaxComplianceContext';
+import { isVatActive } from '@/lib/taxComplianceSettings';
+import { ProductImageThumb, ProductImageUploader } from '@/components/v1/ProductImage';
 
 interface SuppliersViewProps {
   language: Language;
@@ -91,6 +109,8 @@ function buildCustomItemDefaults(businessType: BusinessType, lang: 'sw' | 'en') 
     unit: getDefaultUnit(businessType),
     batchNumber: showBatch ? `BT-${new Date().getFullYear()}-N1` : '',
     expiryDate: showExpiry ? '2028-12-31' : '',
+    vatType: 'standard' as 'standard' | 'exempt' | 'zero',
+    imageUrl: '' as string,
   };
 }
 
@@ -129,12 +149,21 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
   const t = (key: any) => getTranslation(language, key);
   const isSw = language === 'sw';
   const lang = isSw ? 'sw' : 'en' as const;
+  const { config, getActive } = useDocumentTemplates();
+  const { settings: taxSettings } = useTaxCompliance();
+  const purchaseVatAvailable = isVatActive(taxSettings) || taxSettings.mode === 'tra_efd';
   const workplace = getWorkplace(businessType);
   const showBatch = workplace.features?.batch_tracking ?? false;
   const showExpiry = workplace.features?.expiry_alerts ?? false;
   const productPlaceholder = getProductNamePlaceholder(businessType, lang);
   const defaultCategory = getDefaultMainCategory(businessType, lang);
   const supplierIndustry = getSupplierIndustryCategory(businessType, lang);
+
+  const handlePrintGRN = (po: PurchaseOrder) => {
+    const tpl = getActive('delivery_note');
+    const data = poToGrnRenderData(po, isSw);
+    printDocument(tpl, data, config.branding, isSw);
+  };
 
   const handleExportProcurement = () => {
     const totalValue = branchPurchaseOrders.reduce((s, po) => s + (po.totalAmount || 0), 0);
@@ -200,21 +229,62 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
   // Dynamic PO Builder Form State
   const [poForm, setPoForm] = useState<{
     supplierId: string;
+    vendorReference: string;
+    currency: string;
+    orderDeadline: string;
     expectedDate: string;
+    deliverTo: string;
+    askConfirmation: boolean;
     paymentTerms: string;
     paymentMethod: string;
     paymentStatus: 'paid' | 'credit' | 'partial';
+    fiscalPosition: string;
     notes: string;
+    vatNote: string;
+    purchaseVatScope: PurchaseVatScope;
+    poTab: 'products' | 'other';
     items: PurchaseOrderItem[];
   }>({
     supplierId: suppliers[0]?.id || '',
+    vendorReference: '',
+    currency: 'TZS',
+    orderDeadline: new Date().toISOString().slice(0, 16),
     expectedDate: new Date(Date.now() + 2 * 86400000).toISOString().split('T')[0],
+    deliverTo: isSw ? 'Stoo Kuu' : 'Main Store',
+    askConfirmation: false,
     paymentTerms: 'Net 30 Days',
     paymentMethod: 'bank_transfer',
     paymentStatus: 'credit',
+    fiscalPosition: 'local',
     notes: '',
+    vatNote: '',
+    purchaseVatScope: 'none',
+    poTab: 'products',
     items: [] as PurchaseOrderItem[],
   });
+
+  React.useEffect(() => {
+    if (!purchaseVatAvailable) return;
+    const scope = (taxSettings.purchaseVatScope ?? 'none') as PurchaseVatScope;
+    setPoForm(prev => ({
+      ...prev,
+      purchaseVatScope: scope,
+      vatNote: prev.vatNote || taxSettings.purchaseVatNote || '',
+    }));
+  }, [purchaseVatAvailable, taxSettings.purchaseVatScope, taxSettings.purchaseVatNote]);
+
+  const poTotals = useMemo(
+    () => computePurchaseOrderTotals(poForm.items),
+    [poForm.items],
+  );
+
+  const patchPoLine = (index: number, patch: Partial<PurchaseOrderItem>) => {
+    setPoForm(prev => {
+      const items = [...prev.items];
+      items[index] = normalizePurchaseOrderItem({ ...items[index], ...patch });
+      return { ...prev, items };
+    });
+  };
 
   // Temporary row state for adding to PO Form
   const [selectedExistingProdId, setSelectedExistingProdId] = useState<string>(products[0]?.id || '');
@@ -331,6 +401,15 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
       } else {
         // Brand NEW Product introduced in this PO -> Automatically create and register!
         const newProdId = `prod-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+        const meta = (item.metadata ?? {}) as Record<string, unknown>;
+        const imageUrl =
+          (typeof meta.image_url === 'string' && meta.image_url) ||
+          (typeof meta.imageUrl === 'string' && meta.imageUrl) ||
+          undefined;
+        const vatType =
+          (typeof meta.vat_type === 'string' && meta.vat_type) ||
+          (typeof meta.vatType === 'string' && meta.vatType) ||
+          undefined;
         const newProdObj: Product = {
           id: newProdId,
           name: item.productName,
@@ -345,8 +424,9 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
           expiryDate: showExpiry ? (item.expiryDate || '2028-12-31') : undefined,
           businessType,
           requiresPrescription: false,
-          ...(item.metadata ?? {}),
-        } as Product;
+          imageUrl,
+          vatType,
+        };
 
         updatedProductList.unshift(newProdObj);
         newProductsCount++;
@@ -437,6 +517,10 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
         alert('Please enter a product name');
         return;
       }
+      if (!customItemForm.unit?.trim()) {
+        alert(isSw ? 'Chagua au andika kipimo' : 'Select or enter a unit');
+        return;
+      }
 
       const newItem: PurchaseOrderItem = {
         productName: customItemForm.productName,
@@ -448,14 +532,21 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
         unit: customItemForm.unit,
         batchNumber: showBatch ? customItemForm.batchNumber : undefined,
         expiryDate: showExpiry ? customItemForm.expiryDate : undefined,
-        metadata: poDynamicFields.metadata,
+        metadata: {
+          ...(poDynamicFields.metadata || {}),
+          vat_type: customItemForm.vatType || 'standard',
+          ...(customItemForm.imageUrl ? { image_url: customItemForm.imageUrl } : {}),
+        },
+        taxId: resolveLineTaxIdForScope(poForm.purchaseVatScope, customItemForm.vatType || 'standard'),
+        taxRate: 0,
         total: (Number(customItemForm.quantity) || 1) * (Number(customItemForm.costPrice) || 0),
+        taxAmount: 0,
         isNewProduct: true,
       };
 
       setPoForm(prev => ({
         ...prev,
-        items: [...prev.items, newItem],
+        items: [...prev.items, normalizePurchaseOrderItem(newItem)],
       }));
 
       setCustomItemForm(buildCustomItemDefaults(businessType, lang));
@@ -477,13 +568,17 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
         unit: selectedProd.unit,
         batchNumber: showBatch ? `BT-${new Date().getFullYear()}-${Math.floor(10 + Math.random() * 90)}` : undefined,
         expiryDate: showExpiry ? (selectedProd.expiryDate || '2028-12-31') : undefined,
+        metadata: selectedProd.vatType ? { vat_type: selectedProd.vatType } : undefined,
+        taxId: resolveLineTaxIdForScope(poForm.purchaseVatScope, selectedProd.vatType),
+        taxRate: 0,
         total: selectedProd.cost * 20,
+        taxAmount: 0,
         isNewProduct: false,
       };
 
       setPoForm(prev => ({
         ...prev,
-        items: [...prev.items, newItem],
+        items: [...prev.items, normalizePurchaseOrderItem(newItem)],
       }));
     }
   };
@@ -506,22 +601,60 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
     const targetSupplier = suppliers.find(s => s.id === poForm.supplierId) || suppliers[0];
     if (!targetSupplier) return;
 
+    const normalizedItems = poForm.items.map(normalizePurchaseOrderItem);
+    const totals = computePurchaseOrderTotals(normalizedItems);
+
     try {
       const raw = await api.createPurchaseOrder({
         supplier_id: targetSupplier.id,
-        items: poForm.items.map(item => ({
+        vendor_reference: poForm.vendorReference || undefined,
+        currency: poForm.currency,
+        order_deadline: poForm.orderDeadline,
+        deliver_to: poForm.deliverTo,
+        ask_confirmation: poForm.askConfirmation,
+        fiscal_position: poForm.fiscalPosition,
+        payment_terms: poForm.paymentTerms,
+        items: normalizedItems.map(item => ({
           product_id: item.productId,
           product_name: item.productName,
           quantity: item.quantity,
           unit_cost: item.costPrice,
-          total: item.costPrice * item.quantity,
+          selling_price: item.sellingPrice && item.sellingPrice > 0 ? item.sellingPrice : undefined,
+          total: item.total,
+          tax_id: item.taxId ?? 'none',
+          tax_rate: item.taxRate ?? 0,
+          tax_amount: item.taxAmount ?? 0,
           batch_number: item.batchNumber,
           expiry_date: optionalApiDate(item.expiryDate),
         })),
-        notes: poForm.notes,
+        subtotal: totals.subtotal,
+        vat_amount: totals.vatAmount,
+        total_amount: totals.totalAmount,
+        notes: [poForm.notes, poForm.vatNote ? `VAT: ${poForm.vatNote}` : ''].filter(Boolean).join('\n'),
+        purchase_vat_scope: poForm.purchaseVatScope,
+        vat_note: poForm.vatNote || undefined,
         expected_date: poForm.expectedDate,
       });
-      const newPO = mapPurchaseOrder(raw as Record<string, unknown>);
+      const newPO: PurchaseOrder = {
+        ...mapPurchaseOrder(raw as Record<string, unknown>),
+        status: asStatus,
+        items: normalizedItems,
+        subtotal: totals.subtotal,
+        vatAmount: totals.vatAmount,
+        purchaseVatScope: poForm.purchaseVatScope,
+        vatNote: poForm.vatNote || undefined,
+        totalAmount: totals.totalAmount,
+        vendorReference: poForm.vendorReference,
+        currency: poForm.currency,
+        orderDeadline: poForm.orderDeadline,
+        deliverTo: poForm.deliverTo,
+        askConfirmation: poForm.askConfirmation,
+        fiscalPosition: poForm.fiscalPosition,
+        paymentTerms: poForm.paymentTerms,
+        paymentStatus: poForm.paymentStatus,
+        notes: poForm.notes,
+        expectedDate: poForm.expectedDate,
+      };
       setPurchaseOrders(prev => [newPO, ...prev]);
 
       if (setEvents && asStatus === 'sent') {
@@ -676,7 +809,7 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#6264A7] hover:bg-[#555793] text-white text-xs font-semibold shadow-xs transition-all active:scale-95 cursor-pointer"
           >
             <PackagePlus className="w-4 h-4" />
-            <span>{t('createPO')}</span>
+            <span>{isSw ? 'Ombi la Nukuu Bei (RFQ)' : 'Request for Quotation'}</span>
           </button>
 
           <button
@@ -1146,26 +1279,38 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
       {/* ================= MODAL 1: INTERACTIVE PURCHASE ORDER CREATOR ================= */}
       {isCreatingPO && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-2xl max-w-3xl w-full border border-[#E1DFDD] shadow-2xl p-6 space-y-5 my-8">
-            <div className="flex items-center justify-between border-b border-[#EDEBE9] pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-[#6264A7]/10 text-[#6264A7] flex items-center justify-center">
-                  <PackagePlus className="w-5 h-5" />
+          <div className="bg-white rounded-2xl max-w-4xl w-full border border-[#E1DFDD] shadow-2xl p-6 space-y-4 my-8">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 border-b border-[#EDEBE9] pb-3">
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-wide text-[#E65100]">
+                  {isSw ? 'Ombi la Nukuu Bei' : 'Request for Quotation'}
                 </div>
-                <div>
-                  <h3 className="text-base font-bold text-[#323130]">Create Purchase Order (Agizo la Ununuzi)</h3>
-                  <p className="text-[11px] text-[#605E5C]">Add items, set costs, and auto-sync to inventory & calendar</p>
-                </div>
+                <h3 className="text-lg font-bold text-[#323130]">
+                  {isSw ? 'Ombi Jipya la Nunua' : 'New RFQ / Purchase Request'}
+                </h3>
+                <p className="text-[11px] text-[#605E5C] mt-0.5">
+                  {isSw
+                    ? 'Bei za kipimo ni bila kodi. Chagua kodi kwa kila mstari ikiwa inahitajika.'
+                    : 'Unit prices are untaxed by default. Apply tax per line when needed.'}
+                </p>
               </div>
-              <button onClick={() => setIsCreatingPO(false)} className="text-[#605E5C] hover:text-black">
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <div className="hidden sm:flex items-center gap-1 text-[10px] font-bold">
+                  <span className="px-2 py-1 rounded-full bg-[#E65100] text-white">RFQ</span>
+                  <ChevronRight className="w-3 h-3 text-[#605E5C]" />
+                  <span className="px-2 py-1 rounded-full bg-[#F3F2F1] text-[#605E5C]">{isSw ? 'Imetumwa' : 'RFQ Sent'}</span>
+                  <ChevronRight className="w-3 h-3 text-[#605E5C]" />
+                  <span className="px-2 py-1 rounded-full bg-[#F3F2F1] text-[#605E5C]">{isSw ? 'Agizo' : 'PO'}</span>
+                </div>
+                <button onClick={() => setIsCreatingPO(false)} className="text-[#605E5C] hover:text-black p-1">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
-            {/* PO Header Meta */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
               <div>
-                <label className="block font-bold text-[#323130] mb-1">Select Supplier *</label>
+                <label className="block font-bold text-[#323130] mb-1">{isSw ? 'Msambazaji *' : 'Vendor *'}</label>
                 <select
                   value={poForm.supplierId}
                   onChange={e => setPoForm({ ...poForm, supplierId: e.target.value })}
@@ -1175,30 +1320,197 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
                     <option key={s.id} value={s.id}>{s.name} ({s.paymentTerms})</option>
                   ))}
                 </select>
+                <p className="text-[10px] text-[#605E5C] mt-1">{isSw ? 'Jina, TIN, barua pepe, au rejea' : 'Name, TIN, email, or reference'}</p>
               </div>
-
               <div>
-                <label className="block font-bold text-[#323130] mb-1">Expected Delivery Date *</label>
+                <label className="block font-bold text-[#323130] mb-1">{isSw ? 'Rejea ya Msambazaji' : 'Vendor Reference'}</label>
+                <input
+                  type="text"
+                  value={poForm.vendorReference}
+                  onChange={e => setPoForm({ ...poForm, vendorReference: e.target.value })}
+                  placeholder={isSw ? 'Nambari ya ankara ya msambazaji' : 'Supplier quote / invoice ref'}
+                  className="w-full px-3 py-2 bg-[#F3F2F1] border border-[#EDEBE9] rounded-lg font-medium outline-none focus:bg-white focus:border-[#0078D4]"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-[#323130] mb-1">{isSw ? 'Sarafu' : 'Currency'}</label>
+                <select
+                  value={poForm.currency}
+                  onChange={e => setPoForm({ ...poForm, currency: e.target.value })}
+                  className="w-full px-3 py-2 bg-[#F3F2F1] border border-[#EDEBE9] rounded-lg font-medium outline-none focus:bg-white focus:border-[#0078D4]"
+                >
+                  <option value="TZS">TZS</option>
+                  <option value="USD">USD</option>
+                </select>
+              </div>
+              <div>
+                <label className="block font-bold text-[#323130] mb-1">{isSw ? 'Muda wa Agizo' : 'Order Deadline'}</label>
+                <input
+                  type="datetime-local"
+                  value={poForm.orderDeadline}
+                  onChange={e => setPoForm({ ...poForm, orderDeadline: e.target.value })}
+                  className="w-full px-3 py-2 bg-[#F3F2F1] border border-[#EDEBE9] rounded-lg font-medium outline-none focus:bg-white focus:border-[#0078D4]"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-[#323130] mb-1">{isSw ? 'Tarehe Inayotarajiwa' : 'Expected Arrival'}</label>
                 <input
                   type="date"
                   value={poForm.expectedDate}
                   onChange={e => setPoForm({ ...poForm, expectedDate: e.target.value })}
                   className="w-full px-3 py-2 bg-[#F3F2F1] border border-[#EDEBE9] rounded-lg font-medium outline-none focus:bg-white focus:border-[#0078D4]"
                 />
+                <label className="flex items-center gap-2 mt-2 text-[11px] font-semibold text-[#323130]">
+                  <input
+                    type="checkbox"
+                    checked={poForm.askConfirmation}
+                    onChange={e => setPoForm({ ...poForm, askConfirmation: e.target.checked })}
+                  />
+                  {isSw ? 'Omba uthibitisho' : 'Ask confirmation'}
+                </label>
               </div>
-
               <div>
-                <label className="block font-bold text-[#323130] mb-1">Payment Status</label>
-                <select
-                  value={poForm.paymentStatus}
-                  onChange={e => setPoForm({ ...poForm, paymentStatus: e.target.value as any })}
+                <label className="block font-bold text-[#323130] mb-1">{isSw ? 'Wasilisha Kwa' : 'Deliver To'}</label>
+                <input
+                  type="text"
+                  value={poForm.deliverTo}
+                  onChange={e => setPoForm({ ...poForm, deliverTo: e.target.value })}
                   className="w-full px-3 py-2 bg-[#F3F2F1] border border-[#EDEBE9] rounded-lg font-medium outline-none focus:bg-white focus:border-[#0078D4]"
-                >
-                  <option value="credit">Buy on Supplier Credit (Net Terms)</option>
-                  <option value="paid">Paid Upfront (Cash / Bank)</option>
-                </select>
+                />
               </div>
             </div>
+
+            <div className="flex gap-2 border-b border-[#EDEBE9]">
+              {(['products', 'other'] as const).map(tab => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setPoForm({ ...poForm, poTab: tab })}
+                  className={`px-4 py-2 text-xs font-bold border-b-2 -mb-px ${
+                    poForm.poTab === tab
+                      ? 'border-[#E65100] text-[#E65100]'
+                      : 'border-transparent text-[#605E5C] hover:text-[#323130]'
+                  }`}
+                >
+                  {tab === 'products'
+                    ? isSw ? 'Bidhaa' : 'Products'
+                    : isSw ? 'Taarifa Nyingine' : 'Other Information'}
+                </button>
+              ))}
+            </div>
+
+            {poForm.poTab === 'other' && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs p-4 bg-[#FAF9F8] rounded-xl border border-[#EDEBE9]">
+                <div>
+                  <label className="block font-bold text-[#323130] mb-1">{isSw ? 'Masharti ya Malipo' : 'Payment Terms'}</label>
+                  <select
+                    value={poForm.paymentTerms}
+                    onChange={e => setPoForm({ ...poForm, paymentTerms: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-[#EDEBE9] rounded-lg"
+                  >
+                    <option value="Immediate Payment">{isSw ? 'Malipo ya Papo Hapo' : 'Immediate Payment'}</option>
+                    <option value="Net 15 Days">Net 15 Days</option>
+                    <option value="Net 30 Days">Net 30 Days</option>
+                    <option value="Net 60 Days">Net 60 Days</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-bold text-[#323130] mb-1">{isSw ? 'Nafasi ya Kodi' : 'Fiscal Position'}</label>
+                  <select
+                    value={poForm.fiscalPosition}
+                    onChange={e => setPoForm({ ...poForm, fiscalPosition: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-[#EDEBE9] rounded-lg"
+                  >
+                    <option value="local">{isSw ? 'Ndani ya Tanzania (Kodi ya Kawaida)' : 'Domestic (Standard Tax)'}</option>
+                    <option value="exempt">{isSw ? 'Msamaha wa Kodi' : 'Tax Exempt'}</option>
+                    <option value="import">{isSw ? 'Import / Nje ya Nchi' : 'Import / Foreign'}</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-bold text-[#323130] mb-1">{isSw ? 'Hali ya Malipo' : 'Payment Status'}</label>
+                  <select
+                    value={poForm.paymentStatus}
+                    onChange={e => setPoForm({ ...poForm, paymentStatus: e.target.value as 'paid' | 'credit' | 'partial' })}
+                    className="w-full px-3 py-2 bg-white border border-[#EDEBE9] rounded-lg"
+                  >
+                    <option value="credit">{isSw ? 'Mkopo wa Msambazaji' : 'Supplier Credit'}</option>
+                    <option value="paid">{isSw ? 'Imelipwa Mapema' : 'Paid Upfront'}</option>
+                    <option value="partial">{isSw ? 'Malipo ya Sehemu' : 'Partial Payment'}</option>
+                  </select>
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block font-bold text-[#323130] mb-1">{isSw ? 'Masharti & Maelezo' : 'Terms & Conditions'}</label>
+                  <textarea
+                    value={poForm.notes}
+                    onChange={e => setPoForm({ ...poForm, notes: e.target.value })}
+                    rows={3}
+                    placeholder={isSw ? 'Fafanua masharti yako…' : 'Define your terms and conditions…'}
+                    className="w-full px-3 py-2 bg-white border border-[#EDEBE9] rounded-lg resize-none"
+                  />
+                </div>
+              </div>
+            )}
+
+            {poForm.poTab === 'products' && (
+            <>
+            <div className="p-4 rounded-xl border border-[#E65100]/30 bg-orange-50/50 space-y-3">
+                <div className="flex items-start gap-2">
+                  <ShieldCheck className="w-4 h-4 text-[#E65100] mt-0.5 shrink-0" />
+                  <div>
+                    <div className="text-xs font-bold text-[#323130]">
+                      {isSw ? 'VAT 18% kwenye ununuzi (TRA)' : 'Purchase VAT 18% (TRA)'}
+                    </div>
+                    <p className="text-[10px] text-[#605E5C] mt-0.5">
+                      {purchaseVatAvailable
+                        ? (isSw
+                          ? 'Chagua kutumia VAT kwenye mistari yote au bidhaa zilizowekwa VAT tu — kisha unaweza bado kubadilisha kwa mstari.'
+                          : 'Apply VAT to all lines or only VAT-class products — you can still override each line.')
+                        : (isSw
+                          ? 'Washa hali ya VAT au TRA EFD kwenye Usanidi (TRA & EFD) ili kuwezesha chaguo hizi.'
+                          : 'Enable VAT or TRA EFD in Setup (TRA & EFD) to activate these options.')}
+                    </p>
+                  </div>
+                </div>
+                <div className={`grid grid-cols-1 sm:grid-cols-3 gap-2 ${!purchaseVatAvailable ? 'opacity-50' : ''}`}>
+                  {(['none', 'all', 'vat_products'] as PurchaseVatScope[]).map(scope => (
+                    <button
+                      key={scope}
+                      type="button"
+                      disabled={!purchaseVatAvailable}
+                      onClick={() => {
+                        setPoForm(prev => ({
+                          ...prev,
+                          purchaseVatScope: scope,
+                          items: applyPurchaseVatScopeToItems(prev.items, scope, products),
+                        }));
+                      }}
+                      className={`px-3 py-2 rounded-lg text-[11px] font-bold text-left border transition-all cursor-pointer disabled:cursor-not-allowed ${
+                        poForm.purchaseVatScope === scope
+                          ? 'border-[#E65100] bg-white text-[#E65100] ring-1 ring-[#E65100]/30'
+                          : 'border-[#EDEBE9] bg-white text-[#605E5C] hover:border-[#C8C6C4]'
+                      }`}
+                    >
+                      {purchaseVatScopeLabel(scope, isSw)}
+                    </button>
+                  ))}
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-[#605E5C] mb-1">
+                    {isSw ? 'Kumbuka ya VAT / TRA' : 'VAT / TRA note'}
+                  </label>
+                  <input
+                    type="text"
+                    value={poForm.vatNote}
+                    onChange={e => setPoForm({ ...poForm, vatNote: e.target.value })}
+                    disabled={!purchaseVatAvailable}
+                    placeholder={
+                      taxSettings.purchaseVatNote ||
+                      (isSw ? 'mf. Bei bila VAT; VAT 18% inaongezwa' : 'e.g. Prices excl. VAT; VAT 18% added')
+                    }
+                    className="w-full px-3 py-2 bg-white border border-[#EDEBE9] rounded-lg text-xs disabled:opacity-50"
+                  />
+                </div>
+              </div>
 
             {/* Add Line Item Box */}
             <div className="p-4 bg-[#F8F8F8] rounded-xl border border-[#EDEBE9] space-y-3">
@@ -1252,6 +1564,17 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
                 </div>
               ) : (
                 <div className="space-y-3 text-xs">
+                  <div className="p-3 rounded-xl border-2 border-dashed border-[#6264A7]/40 bg-white">
+                    <label className="block text-[11px] font-bold text-[#323130] mb-2">
+                      {isSw ? 'Picha ya Bidhaa' : 'Product Photo'}
+                    </label>
+                    <ProductImageUploader
+                      value={customItemForm.imageUrl || undefined}
+                      onChange={url => setCustomItemForm(prev => ({ ...prev, imageUrl: url || '' }))}
+                      isSw={isSw}
+                    />
+                  </div>
+
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-[11px] font-semibold text-[#605E5C] mb-1">
@@ -1296,14 +1619,13 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
                       />
                     </div>
                     <div>
-                      <label className="block text-[11px] font-semibold text-[#605E5C] mb-1">{isSw ? 'Kipimo' : 'Unit'}</label>
-                      <select
+                      <UnitPicker
+                        label={isSw ? 'Kipimo' : 'Unit'}
+                        units={workplace.default_units}
                         value={customItemForm.unit}
-                        onChange={e => setCustomItemForm({ ...customItemForm, unit: e.target.value })}
-                        className="w-full px-3 py-2.5 bg-white border border-[#C8C6C4] rounded-lg outline-none text-sm font-medium"
-                      >
-                        {workplace.default_units.map(u => <option key={u} value={u}>{u}</option>)}
-                      </select>
+                        onChange={unit => setCustomItemForm({ ...customItemForm, unit })}
+                        isSw={isSw}
+                      />
                     </div>
                     <div>
                       <label className="block text-[11px] font-semibold text-[#605E5C] mb-1">{isSw ? 'Idadi' : 'Quantity'}</label>
@@ -1343,6 +1665,23 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
                         />
                         <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-bold text-[#605E5C]">TSh</span>
                       </div>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-[#605E5C] mb-1">
+                        {isSw ? 'Aina ya VAT' : 'VAT class'}
+                      </label>
+                      <select
+                        value={customItemForm.vatType}
+                        onChange={e => setCustomItemForm({
+                          ...customItemForm,
+                          vatType: e.target.value as 'standard' | 'exempt' | 'zero',
+                        })}
+                        className="w-full px-3 py-2.5 bg-white border border-[#C8C6C4] rounded-lg outline-none text-sm font-semibold"
+                      >
+                        <option value="standard">{isSw ? 'VAT 18% (kawaida)' : 'Standard VAT 18%'}</option>
+                        <option value="exempt">{isSw ? 'Msamaha' : 'Exempt'}</option>
+                        <option value="zero">{isSw ? 'Kiwango 0%' : 'Zero-rated'}</option>
+                      </select>
                     </div>
                     {showBatch && (
                     <div>
@@ -1386,23 +1725,36 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
               <table className="w-full text-left text-xs">
                 <thead className="bg-[#F8F8F8] text-[#605E5C] font-bold border-b border-[#EDEBE9]">
                   <tr>
-                    <th className="py-2.5 px-3">Item Description</th>
-                    <th className="py-2.5 px-3">Quantity</th>
-                    <th className="py-2.5 px-3">Cost (TSh)</th>
-                    <th className="py-2.5 px-3">Selling Price</th>
-                    <th className="py-2.5 px-3 font-bold text-right">Line Total</th>
-                    <th className="py-2.5 px-2 text-center">Action</th>
+                    <th className="py-2.5 px-3">{isSw ? 'Bidhaa' : 'Product'}</th>
+                    <th className="py-2.5 px-3">{isSw ? 'Idadi' : 'Quantity'}</th>
+                    <th className="py-2.5 px-3">{isSw ? 'Bei ya Kununua' : 'Buy Price'}</th>
+                    <th className="py-2.5 px-3">{isSw ? 'Bei ya Kuuza' : 'Sell Price'}</th>
+                    <th className="py-2.5 px-3">{isSw ? 'Kodi' : 'Taxes'}</th>
+                    <th className="py-2.5 px-3 font-bold text-right">{isSw ? 'Kiasi' : 'Amount'}</th>
+                    <th className="py-2.5 px-2 text-center"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#F3F2F1]">
                   {poForm.items.map((item, idx) => (
                     <tr key={idx}>
                       <td className="py-2.5 px-3">
-                        <div className="font-bold text-[#323130] flex items-center gap-1.5">
-                          {item.productName}
-                          {item.isNewProduct && (
-                            <span className="text-[9px] px-1.5 py-0.2 rounded bg-blue-100 text-blue-800 font-bold">NEW</span>
-                          )}
+                        <div className="font-bold text-[#323130] flex items-center gap-2">
+                          <ProductImageThumb
+                            src={
+                              item.productId
+                                ? products.find(p => p.id === item.productId)?.imageUrl
+                                : (item.metadata?.image_url as string | undefined) ||
+                                  (item.metadata?.imageUrl as string | undefined)
+                            }
+                            name={item.productName}
+                            size="sm"
+                          />
+                          <span>
+                            {item.productName}
+                            {item.isNewProduct && (
+                              <span className="ml-1.5 text-[9px] px-1.5 py-0.2 rounded bg-blue-100 text-blue-800 font-bold">NEW</span>
+                            )}
+                          </span>
                         </div>
                         <div className="text-[10px] text-[#605E5C]">
                           SKU: {item.sku || 'N/A'}
@@ -1437,13 +1789,7 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
                           type="number"
                           min="1"
                           value={item.quantity}
-                          onChange={e => {
-                            const val = Number(e.target.value) || 1;
-                            const newItems = [...poForm.items];
-                            newItems[idx].quantity = val;
-                            newItems[idx].total = val * newItems[idx].costPrice;
-                            setPoForm({ ...poForm, items: newItems });
-                          }}
+                          onChange={e => patchPoLine(idx, { quantity: Number(e.target.value) || 1 })}
                           className="w-16 px-2 py-1 bg-[#F3F2F1] rounded text-center font-bold"
                         />
                       </td>
@@ -1452,23 +1798,46 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
                         <input
                           type="number"
                           value={item.costPrice}
-                          onChange={e => {
-                            const val = Number(e.target.value) || 0;
-                            const newItems = [...poForm.items];
-                            newItems[idx].costPrice = val;
-                            newItems[idx].total = newItems[idx].quantity * val;
-                            setPoForm({ ...poForm, items: newItems });
-                          }}
+                          onChange={e => patchPoLine(idx, { costPrice: Number(e.target.value) || 0 })}
                           className="w-24 px-2 py-1 bg-[#F3F2F1] rounded font-bold"
                         />
                       </td>
 
-                      <td className="py-2.5 px-3 font-mono text-[#0078D4]">
-                        {formatTSh(item.sellingPrice || item.costPrice * 1.3)}
+                      <td className="py-2.5 px-3">
+                        <input
+                          type="number"
+                          min={0}
+                          value={item.sellingPrice ?? ''}
+                          placeholder={String(Math.round(item.costPrice * 1.35))}
+                          onChange={e => patchPoLine(idx, { sellingPrice: Number(e.target.value) || 0 })}
+                          className="w-24 px-2 py-1 bg-[#F3F2F1] rounded font-bold text-[#107C10]"
+                        />
+                      </td>
+
+                      <td className="py-2.5 px-3">
+                        <select
+                          value={item.taxId ?? 'none'}
+                          onChange={e => {
+                            const taxId = e.target.value as PurchaseTaxId;
+                            patchPoLine(idx, { taxId, taxRate: purchaseTaxRate(taxId) });
+                          }}
+                          className="w-full min-w-[88px] px-2 py-1 bg-[#F3F2F1] rounded text-[10px] font-semibold"
+                        >
+                          {PURCHASE_TAX_OPTIONS.map(opt => (
+                            <option key={opt.id} value={opt.id}>
+                              {isSw ? opt.labelSw : opt.labelEn}
+                            </option>
+                          ))}
+                        </select>
+                        {(item.taxAmount ?? 0) > 0 && (
+                          <div className="text-[9px] text-[#605E5C] mt-0.5">
+                            +{formatTSh(item.taxAmount ?? 0)} VAT
+                          </div>
+                        )}
                       </td>
 
                       <td className="py-2.5 px-3 font-extrabold text-[#323130] text-right font-mono">
-                        {formatTSh(item.costPrice * item.quantity)}
+                        {formatTSh(item.total)}
                       </td>
 
                       <td className="py-2.5 px-2 text-center">
@@ -1485,18 +1854,32 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
                 </tbody>
               </table>
 
-              <div className="p-3 bg-[#FAF9F8] border-t border-[#EDEBE9] flex justify-between items-center text-xs">
+              <div className="p-3 bg-[#FAF9F8] border-t border-[#EDEBE9] flex flex-col sm:flex-row sm:justify-between gap-3 text-xs">
                 <span className="font-semibold text-[#605E5C]">
-                  Total {poForm.items.length} line items ({poForm.items.reduce((s, i) => s + i.quantity, 0)} units)
+                  {poForm.items.length} {isSw ? 'mistari' : 'lines'} ({poForm.items.reduce((s, i) => s + i.quantity, 0)} {isSw ? 'vipimo' : 'units'})
                 </span>
-                <div className="text-right">
-                  <span className="text-[#605E5C] text-[11px] mr-2">Total PO Valuation:</span>
-                  <span className="text-base font-extrabold text-[#323130] font-mono">
-                    {formatTSh(poForm.items.reduce((s, i) => s + (i.costPrice * i.quantity), 0))}
-                  </span>
+                <div className="text-right space-y-1 min-w-[200px]">
+                  <div className="flex justify-between gap-6">
+                    <span className="text-[#605E5C]">{isSw ? 'Jumla bila Kodi' : 'Untaxed Amount'}</span>
+                    <span className="font-bold font-mono">{formatTSh(poTotals.subtotal)}</span>
+                  </div>
+                  {poTotals.vatAmount > 0 && (
+                    <div className="flex justify-between gap-6">
+                      <span className="text-[#605E5C]">VAT</span>
+                      <span className="font-bold font-mono">{formatTSh(poTotals.vatAmount)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between gap-6 pt-1 border-t border-[#EDEBE9]">
+                    <span className="font-bold text-[#323130]">{isSw ? 'Jumla' : 'Total'}</span>
+                    <span className="text-base font-extrabold text-[#323130] font-mono">
+                      {formatTSh(poTotals.totalAmount)}
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
+            </>
+            )}
 
             {/* Modal Actions */}
             <div className="flex items-center justify-between pt-2 border-t border-[#EDEBE9]">
@@ -1519,9 +1902,9 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
                 <button
                   type="button"
                   onClick={() => handleSavePO('sent')}
-                  className="px-5 py-2 rounded-lg text-xs font-bold text-white bg-[#6264A7] hover:bg-[#555793] shadow-xs cursor-pointer"
+                  className="px-5 py-2 rounded-lg text-xs font-bold text-white bg-[#E65100] hover:bg-[#BF360C] shadow-xs cursor-pointer"
                 >
-                  Send & Order from Supplier →
+                  {isSw ? 'Tuma RFQ / Thibitisha Agizo →' : 'Send RFQ / Confirm Order →'}
                 </button>
               </div>
             </div>
@@ -1560,7 +1943,17 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
                 <div className="font-bold text-[#323130]">{selectedPO.paymentTerms}</div>
               </div>
               <div>
-                <div className="text-[#605E5C]">Total Valuation:</div>
+                <div className="text-[#605E5C]">{isSw ? 'Jumla bila Kodi' : 'Untaxed'}:</div>
+                <div className="font-bold text-[#323130]">{formatTSh(selectedPO.subtotal || selectedPO.totalAmount)}</div>
+              </div>
+              {(selectedPO.vatAmount ?? 0) > 0 && (
+                <div>
+                  <div className="text-[#605E5C]">VAT:</div>
+                  <div className="font-bold text-[#323130]">{formatTSh(selectedPO.vatAmount ?? 0)}</div>
+                </div>
+              )}
+              <div>
+                <div className="text-[#605E5C]">{isSw ? 'Jumla' : 'Total'}:</div>
                 <div className="font-extrabold text-[#107C10]">{formatTSh(selectedPO.totalAmount)}</div>
               </div>
             </div>
@@ -1590,7 +1983,7 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
 
             <div className="flex justify-between items-center pt-2">
               <button
-                onClick={() => alert('Printing Official Stock Inward GRN Receipt...')}
+                onClick={() => handlePrintGRN(selectedPO)}
                 className="px-3 py-1.5 rounded-lg border border-[#C8C6C4] text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
               >
                 <Printer className="w-4 h-4" />

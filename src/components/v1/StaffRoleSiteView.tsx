@@ -71,6 +71,10 @@ import { computeTotalRevenue, computeTotalCOGS, computeTodaySalesStats } from '@
 import { resolveDefaultBranchId } from '@/lib/apiSync';
 import { TodaySalesHeroKpi } from '@/components/v1/TodaySalesHeroKpi';
 import confetti from 'canvas-confetti';
+import { useDocumentTemplates } from '@/context/DocumentTemplateContext';
+import { printDocument } from '@/lib/documentRenderer';
+import { payslipToRenderData, saleReceiptRenderData } from '@/lib/documentDataMappers';
+import type { SalaryPayrollRecord } from '@/types/v1';
 import { api } from '@/lib/api';
 import { canClaimOwnDailyStipend, canAccessVendorTab, canManageStaffRBAC, canSwitchStaffWorkstation, resolveUserPermissions } from '@/lib/rbac';
 import {
@@ -124,6 +128,7 @@ export const StaffRoleSiteView: React.FC<StaffRoleSiteViewProps> = ({
   tenantStorageId,
 }) => {
   const isSw = language === 'sw';
+  const { config, getActive } = useDocumentTemplates();
   const tenantId = tenantStorageId || currentUser?.businessId || currentUser?.id || 'local';
   const todayStr = todayDateStr();
   const canSelfClaimStipend = canClaimOwnDailyStipend(currentUser);
@@ -331,6 +336,32 @@ export const StaffRoleSiteView: React.FC<StaffRoleSiteViewProps> = ({
   const dailyTransport = stipendRates.transport;
   const dailyTotal = stipendRates.total;
   const baseSalary = effectiveStaff?.baseSalary || staffMember?.baseSalary || 450000;
+
+  const handlePrintStaffPayslip = () => {
+    const advances = myAdvances.filter(a => a.status === 'approved').reduce((acc, a) => acc + a.amount, 0);
+    const bonus = 30000;
+    const statutory = Math.round(baseSalary * 0.1);
+    const record: SalaryPayrollRecord = {
+      id: 'staff-preview',
+      monthYear: '2026-07',
+      staffId: effectiveStaff?.id || 'staff',
+      staffName,
+      staffRole: role,
+      baseSalary,
+      totalDailyAllowancesPaid: 0,
+      advancesDeducted: advances,
+      statutoryDeductions: statutory,
+      performanceBonus: bonus,
+      netPayable: Math.round(baseSalary - statutory + bonus - advances),
+      status: 'paid',
+      paymentDate: '2026-07-30',
+      paymentMethod: 'M-Pesa',
+      paymentReference: '',
+      payslipNumber: 'PAYSLIP-2026-07-001',
+    };
+    const tpl = getActive('invoice');
+    printDocument(tpl, payslipToRenderData(record, isSw), config.branding, isSw);
+  };
 
   const syncClaimStateFromStore = useCallback(() => {
     if (!effectiveStaff?.id) return;
@@ -2164,7 +2195,7 @@ export const StaffRoleSiteView: React.FC<StaffRoleSiteViewProps> = ({
 
             <div className="flex justify-end gap-2 pt-2">
               <button
-                onClick={() => window.print()}
+                onClick={handlePrintStaffPayslip}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#1E2244] text-white text-xs font-bold cursor-pointer hover:bg-[#2A305E]"
               >
                 <Printer className="w-4 h-4" />
@@ -2721,8 +2752,15 @@ export const StaffRoleSiteView: React.FC<StaffRoleSiteViewProps> = ({
               <button onClick={() => setIsReceiptModalOpen(false)} className="px-4 py-2 border rounded-lg text-xs font-semibold">Close</button>
               <button
                 onClick={() => {
+                  if (!selectedReceipt) return;
+                  const tpl = getActive('invoice');
+                  printDocument(
+                    tpl,
+                    saleReceiptRenderData(selectedReceipt, isSw),
+                    config.branding,
+                    isSw,
+                  );
                   setIsReceiptModalOpen(false);
-                  showToast(isSw ? 'Risiti ya TRA inachapishwa...' : 'Reprinting TRA Fiscal Slip...');
                 }}
                 className="px-4 py-2 bg-[#0078D4] hover:bg-[#006cbd] text-white rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer"
               >

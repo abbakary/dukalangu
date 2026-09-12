@@ -1,5 +1,6 @@
 import { resolveStaffPermissions } from '@/lib/apiSync';
-import type { AuthUser, StaffPermissions, StaffRole, UserRole } from '@/types/v1';
+import { buildAppModules, filterAccessibleTiles } from '@/lib/appModules';
+import type { AuthUser, BusinessType, StaffPermissions, StaffRole, UserRole } from '@/types/v1';
 
 export function resolveUserPermissions(user: AuthUser | null | undefined): StaffPermissions {
   if (!user) {
@@ -88,14 +89,33 @@ export function canClaimOwnDailyStipend(user: AuthUser | null | undefined): bool
   return Boolean(perms.canPerformDailyClosing || perms.canSellPOS);
 }
 
-export function canAccessVendorTab(user: AuthUser | null | undefined, tab: string): boolean {
+function canAccessModuleHub(
+  user: AuthUser | null | undefined,
+  hubTab: string,
+  businessType?: BusinessType,
+): boolean {
+  const bt = businessType ?? (user?.businessType as BusinessType) ?? 'retail';
+  const mod = buildAppModules(bt).find(m => m.hubTab === hubTab);
+  if (!mod) return false;
+  return filterAccessibleTiles(mod.tiles, user).length > 0;
+}
+
+export function canAccessVendorTab(
+  user: AuthUser | null | undefined,
+  tab: string,
+  businessType?: BusinessType,
+): boolean {
   if (!user) return false;
   if (user.role === 'super_admin') return tab.startsWith('super-') || tab === 'super-dashboard';
 
+  if (tab.startsWith('module-')) {
+    return canAccessModuleHub(user, tab, businessType);
+  }
+
   const map: Record<string, () => boolean> = {
     dashboard: () => {
-      const { isOwner, isManager, isAccountant } = roleFlags(user);
-      return isOwner || isManager || isAccountant;
+      const { isOwner, isManager, isAccountant, isCashier } = roleFlags(user);
+      return isOwner || isManager || isAccountant || isCashier || Boolean(user.staffRole);
     },
     pos: () => {
       const { isOwner, isManager, isCashier, perms } = roleFlags(user);
@@ -114,7 +134,14 @@ export function canAccessVendorTab(user: AuthUser | null | undefined, tab: strin
     payroll: canSeeExpenses,
     inventory: () => {
       const { isOwner, isManager, perms } = roleFlags(user);
-      return isOwner || isManager || user.staffRole === 'Storekeeper' || user.staffRole === 'Pharmacist' || perms.canModifyInventory;
+      return (
+        isOwner ||
+        isManager ||
+        user.staffRole === 'Storekeeper' ||
+        user.staffRole === 'Pharmacist' ||
+        perms.canModifyInventory ||
+        perms.canViewInventory
+      );
     },
     suppliers: () => {
       const { isOwner, isManager, isAccountant, isStorekeeper, perms } = roleFlags(user);
@@ -124,6 +151,7 @@ export function canAccessVendorTab(user: AuthUser | null | undefined, tab: strin
       const { isOwner, isManager, isAccountant, perms } = roleFlags(user);
       return isOwner || isManager || isAccountant || perms.canViewProfitReports;
     },
+    analytics: () => canAccessVendorTab(user, 'reports'),
     'bi-analytics': () => {
       const { isOwner, isManager, isAccountant } = roleFlags(user);
       return isOwner || isManager || isAccountant;
@@ -143,6 +171,10 @@ export function canAccessVendorTab(user: AuthUser | null | undefined, tab: strin
     'transaction-history': () => {
       const { isOwner, isManager, isAccountant, isCashier } = roleFlags(user);
       return isOwner || isManager || isAccountant || isCashier;
+    },
+    'tra-efd': () => {
+      const { isOwner, isManager, isAccountant } = roleFlags(user);
+      return isOwner || isManager || isAccountant;
     },
     'pending-transactions': () => canAccessVendorTab(user, 'pos'),
   };
@@ -216,18 +248,18 @@ export function resolvePosPricingAccess(
 ): PosPricingAccess {
   const perms = resolveUserPermissions(user);
   const maxDiscountPercent = settings.maxDiscountPercent ?? 15;
+  const negotiation = Boolean(settings.negotiationEnabled);
+  const canSell = perms.canSellPOS;
   return {
-    canApplyDiscount: Boolean(settings.discountEnabled) && perms.canSellPOS,
+    canApplyDiscount: (Boolean(settings.discountEnabled) || negotiation) && canSell,
     canApproveHighDiscount: perms.canApproveDiscounts,
     maxDiscountPercent,
     canOverridePrice:
-      Boolean(settings.priceOverrideEnabled) &&
-      (perms.canOverridePrices || perms.canApproveDiscounts),
+      (Boolean(settings.priceOverrideEnabled) || negotiation) &&
+      (perms.canOverridePrices || perms.canApproveDiscounts || (negotiation && canSell)),
     canUsePartialPayment:
-      Boolean(settings.partialPaymentEnabled) && perms.canGiveCredit,
-    canNegotiate:
-      Boolean(settings.negotiationEnabled) &&
       Boolean(settings.partialPaymentEnabled) &&
-      perms.canGiveCredit,
+      (perms.canGiveCredit || canSell),
+    canNegotiate: negotiation && canSell,
   };
 }

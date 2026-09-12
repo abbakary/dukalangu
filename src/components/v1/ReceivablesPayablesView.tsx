@@ -47,6 +47,10 @@ import {
   canSettleCustomerDebt,
   canSettleSupplierPayable,
 } from '@/lib/rbac';
+import { useDocumentTemplates } from '@/context/DocumentTemplateContext';
+import { printDocument } from '@/lib/documentRenderer';
+import { settlementToRenderData } from '@/lib/documentDataMappers';
+import { formatDueDateDisplay } from '@/lib/dueDate';
 
 interface ReceivablesPayablesViewProps {
   language: Language;
@@ -116,6 +120,7 @@ export const ReceivablesPayablesView: React.FC<ReceivablesPayablesViewProps> = (
 }) => {
   const isSw = language === 'sw';
   const t = (key: any) => getTranslation(language, key);
+  const { config, getActive } = useDocumentTemplates();
 
   const branchCustomers = useMemo(
     () => filterByBranchId(customers, activeBranchId),
@@ -214,7 +219,12 @@ export const ReceivablesPayablesView: React.FC<ReceivablesPayablesViewProps> = (
         balanceAfter: s.balanceRemaining,
         cashierName: s.cashierName || (currentUser?.name ? `${currentUser.name} (Cashier)` : 'Cashier'),
         notes: s.balanceRemaining > 0
-          ? (isSw ? `Deni lililobaki: ${formatTSh(s.balanceRemaining)}` : `Balance remaining: ${formatTSh(s.balanceRemaining)}`)
+          ? [
+              isSw ? `Deni lililobaki: ${formatTSh(s.balanceRemaining)}` : `Balance remaining: ${formatTSh(s.balanceRemaining)}`,
+              s.paymentDueDate
+                ? (isSw ? `Tarehe ya malipo: ${formatDueDateDisplay(s.paymentDueDate)}` : `Due date: ${formatDueDateDisplay(s.paymentDueDate)}`)
+                : '',
+            ].filter(Boolean).join(' · ')
           : (isSw ? 'Mauzo ya POS' : 'POS sale receipt'),
         source: 'pos_sale' as const,
       }));
@@ -1499,7 +1509,10 @@ export const ReceivablesPayablesView: React.FC<ReceivablesPayablesViewProps> = (
             <div className="flex gap-2">
               <button
                 onClick={() => {
-                  alert(isSw ? 'Inachapisha hati ya malipo kwa mashine ya risiti...' : 'Printing official settlement voucher...');
+                  if (!activeVoucher) return;
+                  const tpl = getActive('invoice');
+                  const data = settlementToRenderData(activeVoucher, isSw);
+                  printDocument(tpl, data, config.branding, isSw);
                   setActiveVoucher(null);
                 }}
                 className="flex-1 py-2.5 rounded-xl bg-[#0078D4] hover:bg-[#006cbd] text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-xs cursor-pointer"

@@ -370,21 +370,43 @@ export function computeProductInsightsSummary(
   return { bestMoving, slowMoving, territories, crossSellOpportunities };
 }
 
-export function computeShiftCashierStats(sales: SaleTransaction[], cashierName?: string) {
-  const today = new Date().toISOString().split('T')[0];
-  const todaySales = sales.filter(s => s.date.startsWith(today));
+export function computeShiftCashierStats(
+  sales: SaleTransaction[],
+  cashierName?: string,
+  opts?: { shiftOpenedAt?: string | null; mineOnly?: boolean },
+) {
+  const today = localCalendarYmd();
+  const openedAt = opts?.shiftOpenedAt ? new Date(opts.shiftOpenedAt).getTime() : null;
+  const mineOnly = Boolean(opts?.mineOnly && cashierName);
+
+  const todaySales = sales.filter(s => {
+    if (!isCompletedLikeSale(s)) return false;
+    if (!saleDateStartsWith(s.date, today)) return false;
+    if (mineOnly && !saleMatchesName(s.cashierName, cashierName)) return false;
+    if (openedAt != null) {
+      const t = Date.parse(String(s.date).replace(' ', 'T'));
+      if (!Number.isNaN(t) && t < openedAt) return false;
+    }
+    return true;
+  });
+
   const totals = { cash: 0, mpesa: 0, airtel: 0, tigopesa: 0, card: 0, credit: 0 };
   todaySales.forEach(s => {
-    s.payments?.forEach(p => {
-      totals[p.method] = (totals[p.method] ?? 0) + p.amount;
+    const payments = s.payments?.length
+      ? s.payments
+      : [{ method: s.type === 'credit' ? 'credit' as const : 'cash' as const, amount: s.total }];
+    payments.forEach(p => {
+      const method = (p.method || 'cash') as keyof typeof totals;
+      if (method in totals) totals[method] += Number(p.amount || 0);
+      else totals.cash += Number(p.amount || 0);
     });
   });
   const shiftSalesTotal = todaySales.reduce((s, sale) => s + sale.total, 0);
   return {
-    cashierName: cashierName ? `${cashierName} (Cashier)` : 'Cashier',
-    shiftName: 'Today',
+    cashierName: cashierName ? `${cashierName}` : 'Cashier',
+    shiftName: today,
     shiftSalesTotal,
-    shiftTarget: shiftSalesTotal > 0 ? Math.round(shiftSalesTotal * 1.15) : 0,
+    shiftTarget: shiftSalesTotal > 0 ? Math.round(shiftSalesTotal * 1.15) : 50_000,
     receiptsIssued: todaySales.length,
     cashDrawerBalance: totals.cash,
     mpesaCollected: totals.mpesa,
@@ -392,6 +414,72 @@ export function computeShiftCashierStats(sales: SaleTransaction[], cashierName?:
     todayStipendPaid: 0,
     stipendStatus: 'pending' as const,
   };
+}
+
+function localCalendarYmd(d = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** Parse sale timestamps (ISO/Z or "YYYY-MM-DD HH:mm") into local calendar YMD. */
+function saleLocalYmd(date: string): string {
+  const raw = String(date || '').trim();
+  if (!raw) return '';
+  // Prefer explicit local/naive wall-clock prefix when no timezone marker
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(raw)) {
+    return raw.slice(0, 10);
+  }
+  const t = Date.parse(raw.includes(' ') && !raw.includes('T') ? raw.replace(' ', 'T') : raw);
+  if (Number.isNaN(t)) return raw.slice(0, 10);
+  return localCalendarYmd(new Date(t));
+}
+
+function saleDateStartsWith(date: string, ymd: string): boolean {
+  return saleLocalYmd(date) === ymd;
+}
+
+function isCompletedLikeSale(s: SaleTransaction): boolean {
+  const st = String(s.status || '').toLowerCase();
+  if (['cancelled', 'voided', 'refunded', 'open'].includes(st)) return false;
+  return true;
+}
+
+function saleMatchesName(saleCashier: string | undefined, cashierName: string | undefined): boolean {
+  if (!cashierName) return true;
+  const a = (saleCashier || '').trim().toLowerCase();
+  const b = cashierName.trim().toLowerCase();
+  if (!a) return true; // untagged sales still count for shift totals when filter is soft
+  return a === b || a.includes(b) || b.includes(a);
+}
+
+export function computeCashierLeaderboard(
+  sales: SaleTransaction[],
+  opts?: { dateYmd?: string },
+): Array<{ cashierName: string; receipts: number; revenue: number; cash: number; mobile: number }> {
+  const day = opts?.dateYmd || localCalendarYmd();
+  const map = new Map<string, { receipts: number; revenue: number; cash: number; mobile: number }>();
+  sales.forEach(s => {
+    if (!isCompletedLikeSale(s)) return;
+    if (!saleDateStartsWith(s.date, day)) return;
+    const name = (s.cashierName || 'Unknown').trim() || 'Unknown';
+    const cur = map.get(name) ?? { receipts: 0, revenue: 0, cash: 0, mobile: 0 };
+    cur.receipts += 1;
+    cur.revenue += Number(s.total || 0);
+    const payments = s.payments?.length
+      ? s.payments
+      : [{ method: 'cash' as const, amount: s.total }];
+    payments.forEach(p => {
+      const m = String(p.method || 'cash').toLowerCase();
+      if (m === 'cash') cur.cash += Number(p.amount || 0);
+      if (m === 'mpesa' || m === 'airtel' || m === 'tigopesa') cur.mobile += Number(p.amount || 0);
+    });
+    map.set(name, cur);
+  });
+  return Array.from(map.entries())
+    .map(([cashierName, v]) => ({ cashierName, ...v }))
+    .sort((a, b) => b.revenue - a.revenue);
 }
 
 export function computeStaffMobileMoneyTotal(sales: SaleTransaction[]): number {
@@ -641,11 +729,26 @@ export interface TodaySalesStats {
   avgTicket: number;
 }
 
-export function computeTodaySalesStats(sales: SaleTransaction[]): TodaySalesStats {
-  const today = new Date().toISOString().split('T')[0];
-  const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
-  const todaySales = sales.filter(s => s.date.startsWith(today));
-  const yesterdaySales = sales.filter(s => s.date.startsWith(yesterday));
+export function computeTodaySalesStats(
+  sales: SaleTransaction[],
+  opts?: { cashierName?: string; mineOnly?: boolean },
+): TodaySalesStats {
+  const today = localCalendarYmd();
+  const yest = new Date();
+  yest.setDate(yest.getDate() - 1);
+  const yesterday = localCalendarYmd(yest);
+  const mineOnly = Boolean(opts?.mineOnly && opts.cashierName);
+
+  const filterDay = (ymd: string) =>
+    sales.filter(s => {
+      if (!isCompletedLikeSale(s)) return false;
+      if (!saleDateStartsWith(s.date, ymd)) return false;
+      if (mineOnly && !saleMatchesName(s.cashierName, opts?.cashierName)) return false;
+      return true;
+    });
+
+  const todaySales = filterDay(today);
+  const yesterdaySales = filterDay(yesterday);
   const todayRevenue = todaySales.reduce((acc, s) => acc + s.total, 0);
   const yesterdayRevenue = yesterdaySales.reduce((acc, s) => acc + s.total, 0);
   let changePercent: number | null = null;

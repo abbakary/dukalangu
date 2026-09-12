@@ -56,6 +56,7 @@ export const TransactionHistoryView: React.FC<TransactionHistoryViewProps> = ({
     const tpl = getActive(type);
     const data = saleToDocumentRenderData(sale, type, {
       showDiscount: taxSettings.showDiscountOnDocuments && taxSettings.discountEnabled,
+      isSw,
     });
     downloadDocumentPdf(tpl, data, config.branding, isSw);
   };

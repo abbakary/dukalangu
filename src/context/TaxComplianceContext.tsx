@@ -4,11 +4,26 @@ import {
   TaxComplianceSettings,
   loadTaxComplianceSettings,
   saveTaxComplianceSettings,
+  normalizeTaxComplianceSettings,
+  resolveEffectiveTaxSettings,
+  getBranchVatOverride,
 } from '@/lib/taxComplianceSettings';
 import { api } from '@/lib/api';
 
 function businessSettingsFromTax(settings: TaxComplianceSettings): Record<string, unknown> {
   return {
+    mode: settings.mode,
+    vatRegistered: settings.vatRegistered,
+    vatEnabled: settings.vatEnabled,
+    vatRate: settings.vatRate,
+    pricesIncludeVat: settings.pricesIncludeVat,
+    showVatOnReceipt: settings.showVatOnReceipt,
+    showTraSignature: settings.showTraSignature,
+    traEfdSerial: settings.traEfdSerial,
+    tinNumber: settings.tinNumber,
+    vrnNumber: settings.vrnNumber,
+    receiptBusinessName: settings.receiptBusinessName,
+    receiptFooterNote: settings.receiptFooterNote,
     discountEnabled: settings.discountEnabled,
     maxDiscountPercent: settings.maxDiscountPercent,
     showDiscountOnReceipts: settings.showDiscountOnReceipts,
@@ -17,15 +32,24 @@ function businessSettingsFromTax(settings: TaxComplianceSettings): Record<string
     priceOverrideEnabled: settings.priceOverrideEnabled,
     partialPaymentEnabled: settings.partialPaymentEnabled,
     negotiationEnabled: settings.negotiationEnabled,
-    vatEnabled: settings.vatEnabled,
-    vatRate: settings.vatRate,
-    mode: settings.mode,
   };
 }
 
 function mergeTaxFromBusinessSettings(base: TaxComplianceSettings, raw: Record<string, unknown>): TaxComplianceSettings {
-  return {
+  const merged: TaxComplianceSettings = {
     ...base,
+    mode: (raw.mode as TaxComplianceSettings['mode']) ?? base.mode,
+    vatRegistered: raw.vatRegistered !== undefined ? Boolean(raw.vatRegistered) : base.vatRegistered,
+    vatEnabled: raw.vatEnabled !== undefined ? Boolean(raw.vatEnabled) : base.vatEnabled,
+    vatRate: raw.vatRate !== undefined ? Number(raw.vatRate) : base.vatRate,
+    pricesIncludeVat: raw.pricesIncludeVat !== undefined ? Boolean(raw.pricesIncludeVat) : base.pricesIncludeVat,
+    showVatOnReceipt: raw.showVatOnReceipt !== undefined ? Boolean(raw.showVatOnReceipt) : base.showVatOnReceipt,
+    showTraSignature: raw.showTraSignature !== undefined ? Boolean(raw.showTraSignature) : base.showTraSignature,
+    traEfdSerial: (raw.traEfdSerial as string) ?? base.traEfdSerial,
+    tinNumber: (raw.tinNumber as string) ?? base.tinNumber,
+    vrnNumber: (raw.vrnNumber as string) ?? base.vrnNumber,
+    receiptBusinessName: (raw.receiptBusinessName as string) ?? base.receiptBusinessName,
+    receiptFooterNote: (raw.receiptFooterNote as string) ?? base.receiptFooterNote,
     discountEnabled: raw.discountEnabled !== undefined ? Boolean(raw.discountEnabled) : base.discountEnabled,
     maxDiscountPercent: raw.maxDiscountPercent !== undefined ? Number(raw.maxDiscountPercent) : base.maxDiscountPercent,
     showDiscountOnReceipts: raw.showDiscountOnReceipts !== undefined ? Boolean(raw.showDiscountOnReceipts) : base.showDiscountOnReceipts,
@@ -34,10 +58,11 @@ function mergeTaxFromBusinessSettings(base: TaxComplianceSettings, raw: Record<s
     priceOverrideEnabled: raw.priceOverrideEnabled !== undefined ? Boolean(raw.priceOverrideEnabled) : base.priceOverrideEnabled,
     partialPaymentEnabled: raw.partialPaymentEnabled !== undefined ? Boolean(raw.partialPaymentEnabled) : base.partialPaymentEnabled,
     negotiationEnabled: raw.negotiationEnabled !== undefined ? Boolean(raw.negotiationEnabled) : base.negotiationEnabled,
-    vatEnabled: raw.vatEnabled !== undefined ? Boolean(raw.vatEnabled) : base.vatEnabled,
-    vatRate: raw.vatRate !== undefined ? Number(raw.vatRate) : base.vatRate,
-    mode: (raw.mode as TaxComplianceSettings['mode']) ?? base.mode,
   };
+  if (raw.vatRegistered === undefined && merged.mode === 'non_vat') {
+    merged.vatRegistered = false;
+  }
+  return normalizeTaxComplianceSettings(merged);
 }
 
 interface TaxComplianceContextValue {
@@ -45,6 +70,7 @@ interface TaxComplianceContextValue {
   updateSettings: (patch: Partial<TaxComplianceSettings>) => void;
   applySettings: (next: TaxComplianceSettings) => void;
   resetSettings: () => void;
+  effectiveSettings: (branchId?: string | null, branchVatRegistered?: boolean | null) => TaxComplianceSettings;
 }
 
 const TaxComplianceContext = createContext<TaxComplianceContextValue | null>(null);
@@ -102,10 +128,11 @@ export const TaxComplianceProvider: React.FC<TaxComplianceProviderProps> = ({
 
   const persist = useCallback(
     (next: TaxComplianceSettings) => {
-      setSettings(next);
-      saveTaxComplianceSettings(tenantId, next);
+      const normalized = normalizeTaxComplianceSettings(next);
+      setSettings(normalized);
+      saveTaxComplianceSettings(tenantId, normalized);
       if (tenantId) {
-        void api.updateTenantSettings({ business_settings: businessSettingsFromTax(next) }).catch(() => undefined);
+        void api.updateTenantSettings({ business_settings: businessSettingsFromTax(normalized) }).catch(() => undefined);
       }
     },
     [tenantId],
@@ -133,9 +160,18 @@ export const TaxComplianceProvider: React.FC<TaxComplianceProviderProps> = ({
     });
   }, [businessName, persist, tinNumber]);
 
+  const effectiveSettings = useCallback(
+    (branchId?: string | null, branchVatRegistered?: boolean | null) => {
+      const storedOverride = getBranchVatOverride(tenantId, branchId);
+      const override = branchVatRegistered !== undefined ? branchVatRegistered : storedOverride;
+      return resolveEffectiveTaxSettings(settings, override ?? null);
+    },
+    [settings, tenantId],
+  );
+
   const value = useMemo(
-    () => ({ settings, updateSettings, applySettings, resetSettings }),
-    [applySettings, resetSettings, settings, updateSettings],
+    () => ({ settings, updateSettings, applySettings, resetSettings, effectiveSettings }),
+    [applySettings, resetSettings, settings, updateSettings, effectiveSettings],
   );
 
   return (
@@ -151,4 +187,16 @@ export function useTaxCompliance(): TaxComplianceContextValue {
     throw new Error('useTaxCompliance must be used within TaxComplianceProvider');
   }
   return ctx;
+}
+
+/** Effective tax settings for the active branch (org default + branch override). */
+export function useEffectiveTaxCompliance(
+  branchId?: string | null,
+  branchVatRegistered?: boolean | null,
+): TaxComplianceSettings {
+  const { effectiveSettings } = useTaxCompliance();
+  return useMemo(
+    () => effectiveSettings(branchId, branchVatRegistered),
+    [branchId, branchVatRegistered, effectiveSettings],
+  );
 }

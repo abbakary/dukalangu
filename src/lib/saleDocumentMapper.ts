@@ -1,6 +1,7 @@
 import type { SaleTransaction } from '@/types/v1';
 import { computeSaleDiscountAmount } from './saleDiscountUtils';
 import type { DocumentRenderData, DocumentType } from './documentTemplates';
+import { formatDueDateDisplay } from './dueDate';
 
 const DOC_PREFIX: Record<DocumentType, string> = {
   invoice: 'INV',
@@ -13,11 +14,50 @@ export function saleDocumentNumber(sale: SaleTransaction, type: DocumentType): s
   return `${DOC_PREFIX[type]}-${base}`;
 }
 
+function buildSaleDocumentNotes(
+  sale: SaleTransaction,
+  isSw: boolean,
+): string | undefined {
+  const parts: string[] = [];
+
+  if (sale.paidAmount > 0) {
+    parts.push(
+      isSw
+        ? `Imelipwa: TSh ${sale.paidAmount.toLocaleString('en-TZ')}`
+        : `Paid: TSh ${sale.paidAmount.toLocaleString('en-TZ')}`,
+    );
+  }
+  if (sale.balanceRemaining > 0) {
+    parts.push(
+      isSw
+        ? `Deni linalobaki: TSh ${sale.balanceRemaining.toLocaleString('en-TZ')}`
+        : `Balance due: TSh ${sale.balanceRemaining.toLocaleString('en-TZ')}`,
+    );
+  }
+  if (sale.paymentDueDate && sale.balanceRemaining > 0) {
+    parts.push(
+      isSw
+        ? `Tarehe ya malipo: ${formatDueDateDisplay(sale.paymentDueDate)}`
+        : `Payment due: ${formatDueDateDisplay(sale.paymentDueDate)}`,
+    );
+  }
+  if (sale.traEfdSignature) {
+    parts.push(`TRA EFD: ${sale.traEfdSignature}`);
+  } else if (sale.payments?.length && sale.balanceRemaining <= 0) {
+    parts.push(
+      `Payment: ${sale.payments.map(p => `${p.method} ${p.amount}`).join(', ')}`,
+    );
+  }
+
+  return parts.length ? parts.join('\n') : undefined;
+}
+
 export function saleToDocumentRenderData(
   sale: SaleTransaction,
   documentType: DocumentType,
-  options?: { showDiscount?: boolean },
+  options?: { showDiscount?: boolean; isSw?: boolean },
 ): DocumentRenderData {
+  const isSw = options?.isSw ?? false;
   const discount = computeSaleDiscountAmount(sale);
   const subtotalExVat = sale.subtotal ?? sale.total - sale.vatAmount;
   const showDiscount = Boolean(options?.showDiscount) && discount > 0;
@@ -37,11 +77,10 @@ export function saleToDocumentRenderData(
     vatAmount: sale.vatAmount ?? 0,
     total: sale.total,
     showDiscount,
-    notes: sale.traEfdSignature
-      ? `TRA EFD: ${sale.traEfdSignature}`
-      : sale.payments?.length
-        ? `Payment: ${sale.payments.map(p => `${p.method} ${p.amount}`).join(', ')}`
-        : undefined,
+    amountPaid: sale.paidAmount > 0 ? sale.paidAmount : undefined,
+    balanceDue: sale.balanceRemaining > 0 ? sale.balanceRemaining : undefined,
+    paymentDueDate: sale.paymentDueDate,
+    notes: buildSaleDocumentNotes(sale, isSw),
   };
 }
 

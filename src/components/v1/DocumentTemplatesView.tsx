@@ -144,7 +144,7 @@ export const DocumentTemplatesView: React.FC<DocumentTemplatesViewProps> = ({ la
               <input
                 ref={logoInputRef}
                 type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
+                accept="image/*"
                 className="hidden"
                 onChange={handleLogoPick}
               />
@@ -163,8 +163,8 @@ export const DocumentTemplatesView: React.FC<DocumentTemplatesViewProps> = ({ la
               </button>
               <p className="text-[11px] text-[#605E5C]">
                 {isSw
-                  ? 'Buruta na uachie hapa, au bofya kuchagua faili. PNG, JPG, WEBP au GIF — hadi 500 KB.'
-                  : 'Drag and drop here, or click to choose a file. PNG, JPG, WEBP or GIF — max 500 KB.'}
+                  ? 'Buruta na uachie hapa, au bofya kuchagua picha yoyote.'
+                  : 'Drag and drop here, or click to choose any image file.'}
               </p>
               {hasLogo && (
                 <button

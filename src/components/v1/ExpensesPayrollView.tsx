@@ -53,6 +53,9 @@ import {
   type StaffPayrollConfig,
 } from '@/lib/payrollStore';
 import type { AuthUser } from '@/types/v1';
+import { useDocumentTemplates } from '@/context/DocumentTemplateContext';
+import { printDocument } from '@/lib/documentRenderer';
+import { payslipToRenderData } from '@/lib/documentDataMappers';
 
 interface ExpensesPayrollViewProps {
   language: Language;
@@ -80,6 +83,7 @@ export const ExpensesPayrollView: React.FC<ExpensesPayrollViewProps> = ({
 }) => {
   const isSw = language === 'sw';
   const t = (key: any) => getTranslation(language, key);
+  const { config, getActive } = useDocumentTemplates();
   const canManage = canManageExpenses(currentUser);
   const canPayroll = canManagePayroll(currentUser);
   const canConfigAllowances = canConfigureAllowances(currentUser);
@@ -1558,7 +1562,12 @@ export const ExpensesPayrollView: React.FC<ExpensesPayrollViewProps> = ({
 
             <div className="flex justify-end gap-2 pt-2">
               <button
-                onClick={() => window.print()}
+                onClick={() => {
+                  if (!selectedPayslip) return;
+                  const tpl = getActive('invoice');
+                  const data = payslipToRenderData(selectedPayslip, isSw);
+                  printDocument(tpl, data, config.branding, isSw);
+                }}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#1E2244] text-white text-xs font-bold cursor-pointer hover:bg-[#2A305E]"
               >
                 <Printer className="w-4 h-4" />

@@ -259,8 +259,14 @@ class ApiClient {
     return this.request<Array<Record<string, unknown>>>(`/purchase-orders${q}`);
   }
   createPurchaseOrder(data: Record<string, unknown>) { return this.request('/purchase-orders', { method: 'POST', body: JSON.stringify(data) }); }
-  receivePurchaseOrder(id: string, notes?: string) {
-    return this.request(`/purchase-orders/${id}/receive`, { method: 'POST', body: JSON.stringify({ notes }) });
+  receivePurchaseOrder(
+    id: string,
+    payload?: { notes?: string; items?: Array<Record<string, unknown>> },
+  ) {
+    return this.request(`/purchase-orders/${id}/receive`, {
+      method: 'POST',
+      body: JSON.stringify(payload ?? {}),
+    });
   }
   cancelPurchaseOrder(id: string, reason?: string) {
     return this.request(`/purchase-orders/${id}`, {

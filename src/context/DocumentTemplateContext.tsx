@@ -12,7 +12,7 @@ import {
   DocumentBranding,
   DocumentTemplate,
 } from '@/lib/documentTemplates';
-import { compressLogoFile } from '@/lib/imageCompress';
+import { compressLogoFile, readFileAsDataUrl } from '@/lib/imageCompress';
 
 interface DocumentTemplateContextValue {
   config: TenantDocumentConfig;
@@ -140,21 +140,39 @@ export const DocumentTemplateProvider: React.FC<Props> = ({
 
   const uploadLogo = useCallback(
     async (file: File) => {
-      const allowed = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif', 'image/pjpeg'];
-      if (file.type && !allowed.includes(file.type)) {
-        throw new Error('Please choose a PNG, JPEG, WEBP, or GIF image.');
+      let dataUrl: string;
+      try {
+        ({ dataUrl } = await compressLogoFile(file));
+      } catch {
+        dataUrl = await readFileAsDataUrl(file);
       }
-      const { dataUrl } = await compressLogoFile(file);
+
+      const applyLocal = (url: string) => {
+        setConfig(prev => {
+          const next = {
+            ...prev,
+            branding: { ...prev.branding, logoUrl: url },
+            updatedAt: new Date().toISOString(),
+          };
+          saveTenantDocumentConfig(tenantId, next);
+          return next;
+        });
+      };
+
+      applyLocal(dataUrl);
+
       if (tenantId) {
-        const res = await api.uploadDocumentLogo(dataUrl);
-        const mapped = mapApiDocumentConfig(res.document_config ?? {}, businessName);
-        setConfig(mapped);
-        saveTenantDocumentConfig(tenantId, mapped);
-      } else {
-        updateBranding({ logoUrl: dataUrl });
+        try {
+          const res = await api.uploadDocumentLogo(dataUrl);
+          const mapped = mapApiDocumentConfig(res.document_config ?? {}, businessName);
+          setConfig(mapped);
+          saveTenantDocumentConfig(tenantId, mapped);
+        } catch {
+          // Logo already saved locally — sync will retry later.
+        }
       }
     },
-    [tenantId, businessName, updateBranding],
+    [tenantId, businessName],
   );
 
   const removeLogo = useCallback(async () => {

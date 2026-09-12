@@ -51,6 +51,7 @@ import { planBranchLabel, formatPlanPrice } from '@/lib/saasPlans';
 import { useSaasPlans } from '@/context/SaasPlansContext';
 import { api } from '@/lib/api';
 import { mapBranch } from '@/lib/apiSync';
+import { saveBranchVatOverride } from '@/lib/taxComplianceSettings';
 
 interface BranchManagementViewProps {
   language: Language;
@@ -69,6 +70,7 @@ interface BranchManagementViewProps {
   onOpenAIChatWithPrompt?: (prompt: string) => void;
   onNavigateToPOS?: () => void;
   onNavigateToInventory?: () => void;
+  tenantId?: string | null;
 }
 
 export const BranchManagementView: React.FC<BranchManagementViewProps> = ({
@@ -87,7 +89,8 @@ export const BranchManagementView: React.FC<BranchManagementViewProps> = ({
   setCurrentPlanTier,
   onOpenAIChatWithPrompt,
   onNavigateToPOS,
-  onNavigateToInventory
+  onNavigateToInventory,
+  tenantId,
 }) => {
   const isSw = language === 'sw';
   const [activeTab, setActiveTab] = useState<'branches' | 'transfers' | 'analytics' | 'pricing'>('branches');
@@ -119,6 +122,7 @@ export const BranchManagementView: React.FC<BranchManagementViewProps> = ({
     traEfdSerial: string;
     openingHours: string;
     notes: string;
+    vatTaxStatus: 'inherit' | 'vat_registered' | 'not_vat_registered';
   }>({
     name: '',
     code: '',
@@ -135,7 +139,8 @@ export const BranchManagementView: React.FC<BranchManagementViewProps> = ({
     adminPassword: '',
     traEfdSerial: `EFD-TZ-2026-${Math.floor(1000 + Math.random() * 9000)}`,
     openingHours: '08:00 - 20:00',
-    notes: ''
+    notes: '',
+    vatTaxStatus: 'inherit',
   });
   const [branchSaving, setBranchSaving] = useState(false);
   const [branchSaveError, setBranchSaveError] = useState<string | null>(null);
@@ -180,6 +185,13 @@ export const BranchManagementView: React.FC<BranchManagementViewProps> = ({
 
     if (editingBranch) {
       const selectedManager = staffMembers.find(s => s.id === branchFormData.managerStaffId);
+      const branchVatRegistered =
+        branchFormData.vatTaxStatus === 'inherit'
+          ? null
+          : branchFormData.vatTaxStatus === 'vat_registered';
+      if (tenantId) {
+        saveBranchVatOverride(tenantId, editingBranch.id, branchVatRegistered);
+      }
       setBranches(prev => prev.map(b => b.id === editingBranch.id ? {
         ...b,
         name: branchFormData.name,
@@ -193,7 +205,8 @@ export const BranchManagementView: React.FC<BranchManagementViewProps> = ({
         managerStaffId: branchFormData.managerStaffId,
         managerName: selectedManager ? `${selectedManager.name} (${selectedManager.role})` : b.managerName,
         openingHours: branchFormData.openingHours,
-        notes: branchFormData.notes
+        notes: branchFormData.notes,
+        vatRegistered: branchVatRegistered,
       } : b));
       setEditingBranch(null);
       setIsAddBranchModalOpen(false);
@@ -266,7 +279,17 @@ export const BranchManagementView: React.FC<BranchManagementViewProps> = ({
       managerStaffId: b.managerStaffId || '',
       traEfdSerial: b.traEfdSerial,
       openingHours: b.openingHours,
-      notes: b.notes || ''
+      notes: b.notes || '',
+      adminName: '',
+      adminEmail: '',
+      adminPhone: '+255 ',
+      adminPassword: '',
+      vatTaxStatus:
+        b.vatRegistered === true
+          ? 'vat_registered'
+          : b.vatRegistered === false
+            ? 'not_vat_registered'
+            : 'inherit',
     });
     setIsAddBranchModalOpen(true);
   };
@@ -1324,6 +1347,26 @@ export const BranchManagementView: React.FC<BranchManagementViewProps> = ({
                   />
                 </div>
               </div>
+
+              {editingBranch && (
+                <div>
+                  <label className="font-bold text-[#323130] block mb-1">
+                    {isSw ? 'Hali ya Kodi (VAT)' : 'Tax status (VAT)'}
+                  </label>
+                  <select
+                    value={branchFormData.vatTaxStatus}
+                    onChange={e => setBranchFormData(prev => ({
+                      ...prev,
+                      vatTaxStatus: e.target.value as 'inherit' | 'vat_registered' | 'not_vat_registered',
+                    }))}
+                    className="w-full px-3 py-2 bg-white border border-[#C8C6C4] rounded-lg outline-none text-sm"
+                  >
+                    <option value="inherit">{isSw ? 'Rudi kwa mpangilio wa biashara' : 'Inherit organization default'}</option>
+                    <option value="vat_registered">{isSw ? 'Msajili wa VAT' : 'VAT Registered'}</option>
+                    <option value="not_vat_registered">{isSw ? 'Sio msajili wa VAT' : 'Not VAT Registered'}</option>
+                  </select>
+                </div>
+              )}
 
               {branchSaveError && (
                 <div className="rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs px-3 py-2">

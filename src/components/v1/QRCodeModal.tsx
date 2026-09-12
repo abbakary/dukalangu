@@ -16,6 +16,8 @@ import {
 import { Product, Language } from '@/types/v1';
 import { formatTSh, getTranslation } from '@/utils/translations';
 import { generateProductQRCodeDataUrl, getProductQRPayloadString } from '@/utils/qrGenerator';
+import { printHtmlPage } from '@/lib/documentRenderer';
+import { qrLabelsPrintHtml } from '@/lib/documentDataMappers';
 
 interface QRCodeModalProps {
   isOpen: boolean;
@@ -73,8 +75,35 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({
     }
   };
 
-  const handlePrint = () => {
-    window.print();
+  const handlePrint = async () => {
+    if (mode === 'single' && product && qrDataUrl) {
+      printHtmlPage(
+        isSw ? 'Lebo ya QR' : 'QR Label',
+        qrLabelsPrintHtml([{
+          name: product.name,
+          sku: product.sku,
+          price: product.price,
+          qrDataUrl,
+        }], isSw),
+        isSw,
+      );
+      return;
+    }
+    if (mode === 'batch' && batchDataUrls.length > 0) {
+      printHtmlPage(
+        isSw ? 'Lebo za QR' : 'QR Labels',
+        qrLabelsPrintHtml(
+          batchDataUrls.map(({ product: p, url }) => ({
+            name: p.name,
+            sku: p.sku,
+            price: p.price,
+            qrDataUrl: url,
+          })),
+          isSw,
+        ),
+        isSw,
+      );
+    }
   };
 
   const handleDownloadSingle = () => {

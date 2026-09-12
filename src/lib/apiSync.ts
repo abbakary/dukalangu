@@ -1,4 +1,6 @@
 import { api } from '@/lib/api';
+import { enforceSaleTaxTotals } from '@/lib/taxEnforcement';
+import type { TaxComplianceSettings } from '@/lib/taxComplianceSettings';
 import { computeSaleDiscountAmount } from './saleDiscountUtils';
 import type {
   BusinessType,
@@ -45,9 +47,42 @@ export interface ApiSyncResult {
 }
 
 export function mapProduct(p: Record<string, unknown>): Product {
-  const meta = (p.metadata_json as Record<string, unknown>) ?? {};
+  const rawMeta = p.metadata_json ?? p.metadata;
+  let meta: Record<string, unknown> = {};
+  if (rawMeta && typeof rawMeta === 'object' && !Array.isArray(rawMeta)) {
+    meta = rawMeta as Record<string, unknown>;
+  } else if (typeof rawMeta === 'string' && rawMeta.trim()) {
+    try {
+      const parsed = JSON.parse(rawMeta) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        meta = parsed as Record<string, unknown>;
+      }
+    } catch {
+      /* ignore malformed metadata */
+    }
+  }
+
+  const pickImage = (...candidates: unknown[]): string | undefined => {
+    for (const c of candidates) {
+      if (typeof c === 'string' && c.trim().length > 0) return c;
+    }
+    return undefined;
+  };
+
+  const imageUrl = pickImage(
+    p.image_url,
+    p.imageUrl,
+    meta.image_url,
+    meta.imageUrl,
+  );
+  const vatType =
+    (typeof p.vat_type === 'string' && p.vat_type) ||
+    (typeof p.vatType === 'string' && p.vatType) ||
+    (typeof meta.vat_type === 'string' && meta.vat_type) ||
+    (typeof meta.vatType === 'string' && meta.vatType) ||
+    undefined;
+
   return {
-    ...meta,
     id: p.id as string,
     branchId: (p.branch_id as string) ?? undefined,
     name: p.name as string,
@@ -62,6 +97,14 @@ export function mapProduct(p: Record<string, unknown>): Product {
     expiryDate: p.expiry_date ? String(p.expiry_date).slice(0, 10) : undefined,
     businessType: (p.business_type as BusinessType) ?? 'retail',
     requiresPrescription: Boolean(p.requires_prescription),
+    supplier:
+      (typeof meta.supplier_name === 'string' && meta.supplier_name) ||
+      (typeof meta.supplier === 'string' && meta.supplier) ||
+      (typeof p.supplier === 'string' ? p.supplier : undefined),
+    description: (typeof meta.description === 'string' && meta.description) || undefined,
+    location: (typeof meta.location === 'string' && meta.location) || undefined,
+    imageUrl,
+    vatType,
   } as Product;
 }
 
@@ -116,9 +159,15 @@ export function filterPurchaseOrdersByBranch(
   });
 }
 
-export async function fetchProductsFromApi(branchId?: string | null): Promise<Product[]> {
+export async function fetchProductsFromApi(
+  branchId?: string | null,
+  tenantId?: string | null,
+): Promise<Product[]> {
   const raw = await api.getAllProducts(branchId);
-  return (raw as Array<Record<string, unknown>>).map(mapProduct);
+  const mapped = (raw as Array<Record<string, unknown>>).map(mapProduct);
+  if (!tenantId) return mapped;
+  const { withProductImageCache } = await import('@/lib/productImageCache');
+  return withProductImageCache(tenantId, mapped);
 }
 
 export async function fetchCustomersFromApi(branchId?: string | null): Promise<Customer[]> {
@@ -207,6 +256,10 @@ export function mapBranch(b: Record<string, unknown>): StoreBranch {
     stockValuationTzs: 0,
     traEfdSerial: (b.tra_efd_serial as string) ?? '',
     openingHours: (b.opening_hours as string) ?? '08:00 - 20:00',
+    vatRegistered:
+      b.vat_registered === null || b.vat_registered === undefined
+        ? undefined
+        : Boolean(b.vat_registered),
     createdDate: String(b.created_at ?? '').slice(0, 10),
   };
 }
@@ -244,32 +297,32 @@ export function mapEvent(ev: Record<string, unknown>): CalendarEvent {
 
 const DEFAULT_STAFF_PERMISSIONS: Record<StaffRole, StaffPermissions> = {
   Owner: {
-    canSellPOS: true, canGiveCredit: true, canModifyInventory: true,
+    canSellPOS: true, canGiveCredit: true, canModifyInventory: true, canViewInventory: true,
     canViewProfitReports: true, canManageSuppliers: true, canApproveDiscounts: true,
     canOverridePrices: true, canVoidReceipts: true, canPerformDailyClosing: true, canAccessSuperAdmin: false,
   },
   Manager: {
-    canSellPOS: true, canGiveCredit: true, canModifyInventory: true,
+    canSellPOS: true, canGiveCredit: true, canModifyInventory: true, canViewInventory: true,
     canViewProfitReports: true, canManageSuppliers: true, canApproveDiscounts: true,
     canOverridePrices: true, canVoidReceipts: true, canPerformDailyClosing: true, canAccessSuperAdmin: false,
   },
   Pharmacist: {
-    canSellPOS: true, canGiveCredit: true, canModifyInventory: true,
+    canSellPOS: true, canGiveCredit: true, canModifyInventory: true, canViewInventory: true,
     canViewProfitReports: false, canManageSuppliers: true, canApproveDiscounts: true,
     canOverridePrices: true, canVoidReceipts: true, canPerformDailyClosing: false, canAccessSuperAdmin: false,
   },
   Cashier: {
-    canSellPOS: true, canGiveCredit: false, canModifyInventory: false,
+    canSellPOS: true, canGiveCredit: false, canModifyInventory: false, canViewInventory: true,
     canViewProfitReports: false, canManageSuppliers: false, canApproveDiscounts: false,
     canOverridePrices: false, canVoidReceipts: false, canPerformDailyClosing: true, canAccessSuperAdmin: false,
   },
   Storekeeper: {
-    canSellPOS: false, canGiveCredit: false, canModifyInventory: true,
+    canSellPOS: false, canGiveCredit: false, canModifyInventory: true, canViewInventory: true,
     canViewProfitReports: false, canManageSuppliers: true, canApproveDiscounts: false,
     canOverridePrices: false, canVoidReceipts: false, canPerformDailyClosing: false, canAccessSuperAdmin: false,
   },
   Accountant: {
-    canSellPOS: false, canGiveCredit: true, canModifyInventory: true,
+    canSellPOS: false, canGiveCredit: true, canModifyInventory: true, canViewInventory: true,
     canViewProfitReports: true, canManageSuppliers: true, canApproveDiscounts: false,
     canOverridePrices: false, canVoidReceipts: false, canPerformDailyClosing: true, canAccessSuperAdmin: false,
   },
@@ -324,11 +377,23 @@ export function mapPurchaseOrder(po: Record<string, unknown>): PurchaseOrder {
       productName: (i.product_name as string) ?? '',
       quantity: (i.quantity as number) ?? 0,
       costPrice: (i.unit_cost as number) ?? 0,
+      sellingPrice:
+        i.selling_price != null ? Number(i.selling_price) : undefined,
       total: (i.total as number) ?? 0,
+      taxId: (i.tax_id as PurchaseOrder['items'][0]['taxId']) ?? 'none',
+      taxRate: Number(i.tax_rate ?? 0),
+      taxAmount: Number(i.tax_amount ?? 0),
     })),
     subtotal: (po.subtotal as number) ?? 0,
+    vatAmount: Number(po.vat_amount ?? 0),
     totalAmount: (po.total_amount as number) ?? 0,
     paidAmount: (po.paid_amount as number) ?? 0,
+    vendorReference: (po.vendor_reference as string) ?? undefined,
+    currency: (po.currency as string) ?? 'TZS',
+    orderDeadline: (po.order_deadline as string) ?? undefined,
+    deliverTo: (po.deliver_to as string) ?? undefined,
+    askConfirmation: po.ask_confirmation === true,
+    fiscalPosition: (po.fiscal_position as string) ?? undefined,
   };
 }
 
@@ -347,7 +412,17 @@ export function mapSale(s: Record<string, unknown>): SaleTransaction {
     id: s.id as string,
     branchId: (s.branch_id as string) ?? undefined,
     receiptNumber: (s.receipt_number as string) ?? '',
-    date: String(s.created_at ?? '').replace('T', ' ').slice(0, 16),
+    date: (() => {
+      const raw = String(s.created_at ?? '');
+      const parsed = Date.parse(raw);
+      if (!Number.isNaN(parsed)) {
+        const d = new Date(parsed);
+        const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+        return `${ymd} ${hm}`;
+      }
+      return raw.replace('T', ' ').slice(0, 16);
+    })(),
     customerId: (s.customer_id as string) ?? undefined,
     customerName: (s.customer_name as string) ?? 'Walk-in',
     items: mappedItems,
@@ -362,6 +437,7 @@ export function mapSale(s: Record<string, unknown>): SaleTransaction {
     cashierName: (s.cashier_name as string) ?? '',
     traEfdSignature: (s.tra_efd_signature as string) ?? '',
     status: (s.status as SaleTransaction['status']) ?? 'completed',
+    paymentDueDate: (s.due_date as string) ?? (s.payment_due_date as string) ?? undefined,
   };
   sale.discountAmount = computeSaleDiscountAmount(sale);
   return sale;
@@ -454,13 +530,23 @@ export async function syncTenantFromApi(branchId?: string | null): Promise<ApiSy
     const salesRaw = unwrap(salesResult, [] as Array<Record<string, unknown>>);
     const movementsRaw = unwrap(movementsResult, [] as Array<Record<string, unknown>>);
 
+    let products = productsRaw.map(mapProduct);
+    const tenantKey =
+      String((profile as Record<string, unknown>).tenant_id ?? '') ||
+      String((profile as Record<string, unknown>).id ?? '') ||
+      '';
+    if (tenantKey) {
+      const { withProductImageCache } = await import('@/lib/productImageCache');
+      products = await withProductImageCache(tenantKey, products);
+    }
+
     return {
       businessType: profile.business_type as BusinessType,
       businessName: profile.business_name,
       plan: (profile as { plan?: string }).plan as import('@/types/v1').SaaSPlanTier | undefined,
       subscriptionExpiry: String((profile as { subscription_expiry?: string }).subscription_expiry ?? '').slice(0, 10) || undefined,
       tenantStatus: (profile as { status?: string }).status,
-      products: productsRaw.map(mapProduct),
+      products,
       customers: customersRaw.map(mapCustomer),
       customersFetchOk: customersResult.status === 'fulfilled',
       suppliers: suppliersRaw.map(mapSupplier),
@@ -573,7 +659,17 @@ export async function fetchDashboardStats(branchId?: string | null): Promise<Das
   }
 }
 
-export function productToApiPayload(p: Partial<Product> & { name: string }, branchId?: string | null) {
+export function productToApiPayload(
+  p: Partial<Product> & { name: string; metadata_json?: Record<string, unknown> },
+  branchId?: string | null,
+) {
+  const existingMeta = p.metadata_json ?? {};
+  const metadata_json: Record<string, unknown> = { ...existingMeta };
+  if (p.imageUrl) metadata_json.image_url = p.imageUrl;
+  else delete metadata_json.image_url;
+  if (p.vatType) metadata_json.vat_type = p.vatType;
+  if (p.supplier) metadata_json.supplier_name = p.supplier;
+
   return {
     name: p.name,
     category: p.category,
@@ -587,7 +683,10 @@ export function productToApiPayload(p: Partial<Product> & { name: string }, bran
     expiry_date: optionalApiDate(p.expiryDate),
     requires_prescription: p.requiresPrescription,
     business_type: p.businessType,
-    metadata_json: (p as { metadata_json?: Record<string, unknown> }).metadata_json,
+    // Top-level fields (backend folds into metadata_json) — keeps photos even if metadata merge fails
+    image_url: p.imageUrl || undefined,
+    vat_type: p.vatType || undefined,
+    metadata_json: Object.keys(metadata_json).length ? metadata_json : undefined,
     branch_id: branchId && branchId !== 'all' ? branchId : (p as Product).branchId,
   };
 }
@@ -652,17 +751,26 @@ export function eventToApiPayload(
 
 export function saleToApiPayload(
   sale: SaleTransaction,
-  options?: { finalize?: boolean; branchId?: string | null },
+  options?: {
+    finalize?: boolean;
+    branchId?: string | null;
+    taxSettings?: TaxComplianceSettings;
+  },
 ) {
   const finalize =
     options?.finalize ??
     (sale.status === 'completed' || sale.status === 'pending_credit');
-  const discountAmount = computeSaleDiscountAmount(sale);
   const resolvedBranch =
     sale.branchId ||
     (options?.branchId && options.branchId !== 'all' ? options.branchId : null);
+
+  const enforced = options?.taxSettings
+    ? enforceSaleTaxTotals(sale, options.taxSettings)
+    : sale;
+
+  const discountAmount = computeSaleDiscountAmount(enforced);
   return {
-    items: sale.items.map(i => ({
+    items: enforced.items.map(i => ({
       product_id: i.productId,
       product_name: i.productName,
       quantity: i.quantity,
@@ -671,17 +779,24 @@ export function saleToApiPayload(
       discount_percent: i.discountPercent ?? 0,
       original_unit_price: i.originalUnitPrice ?? i.unitPrice,
     })),
+    subtotal: enforced.subtotal,
     discount_amount: discountAmount,
-    customer_id: sale.customerId || null,
-    customer_name: sale.customerName,
-    payments: (sale.payments ?? []).map(p => ({
+    cart_discount_percent: enforced.cartDiscountPercent ?? 0,
+    vat_amount: enforced.vatAmount,
+    total: enforced.total,
+    customer_id: enforced.customerId || null,
+    customer_name: enforced.customerName,
+    payments: (enforced.payments ?? []).map(p => ({
       method: p.method,
       amount: p.amount,
       reference: p.reference,
     })),
-    sale_type: sale.type,
+    sale_type: enforced.type,
     branch_id: resolvedBranch,
-    client_id: sale.id,
+    client_id: enforced.id,
     finalize,
+    ...(enforced.paymentDueDate && enforced.balanceRemaining > 0
+      ? { due_date: enforced.paymentDueDate, payment_due_date: enforced.paymentDueDate }
+      : {}),
   };
 }

@@ -25,6 +25,7 @@ const defaultPermissions = (): StaffPermissions => ({
   canSellPOS: false,
   canGiveCredit: false,
   canModifyInventory: false,
+  canViewInventory: false,
   canViewProfitReports: false,
   canManageSuppliers: false,
   canApproveDiscounts: false,
@@ -36,26 +37,32 @@ const defaultPermissions = (): StaffPermissions => ({
 
 function rolePreset(role: StaffRole): StaffPermissions {
   const base = defaultPermissions();
-  if (role === 'Cashier') return { ...base, canSellPOS: true, canPerformDailyClosing: true };
+  if (role === 'Cashier') {
+    return { ...base, canSellPOS: true, canViewInventory: true, canPerformDailyClosing: true };
+  }
   if (role === 'Pharmacist') {
     return {
       ...base,
       canSellPOS: true,
       canGiveCredit: true,
       canModifyInventory: true,
+      canViewInventory: true,
       canManageSuppliers: true,
       canApproveDiscounts: true,
       canOverridePrices: true,
       canVoidReceipts: true,
     };
   }
-  if (role === 'Storekeeper') return { ...base, canModifyInventory: true, canManageSuppliers: true };
+  if (role === 'Storekeeper') {
+    return { ...base, canModifyInventory: true, canViewInventory: true, canManageSuppliers: true };
+  }
   if (role === 'Accountant') {
     return {
       ...base,
       canSellPOS: true,
       canGiveCredit: true,
       canModifyInventory: true,
+      canViewInventory: true,
       canViewProfitReports: true,
       canManageSuppliers: true,
       canApproveDiscounts: true,
@@ -67,6 +74,7 @@ function rolePreset(role: StaffRole): StaffPermissions {
     canSellPOS: true,
     canGiveCredit: true,
     canModifyInventory: true,
+    canViewInventory: true,
     canViewProfitReports: true,
     canManageSuppliers: true,
     canApproveDiscounts: true,

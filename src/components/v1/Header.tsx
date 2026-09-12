@@ -139,7 +139,7 @@ export const Header: React.FC<HeaderProps> = ({
       >
         {/* Left Section: Home Nav & Search Bar */}
         <div className="flex items-center gap-2 shrink-0">
-          {onGoToLanding && (
+          {onGoToLanding && !currentUser && (
             <button
               onClick={onGoToLanding}
               title={isSw ? 'Rudi Ukurasa Mkuu' : 'Back to Landing Page'}

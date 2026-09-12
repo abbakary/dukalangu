@@ -1,7 +1,9 @@
-export type TaxComplianceMode = 'manual' | 'tra_efd';
+export type TaxComplianceMode = 'manual' | 'non_vat' | 'tra_efd';
 
 export interface TaxComplianceSettings {
   mode: TaxComplianceMode;
+  /** Organization tax status — when false, VAT is never applied regardless of client payload. */
+  vatRegistered: boolean;
   vatEnabled: boolean;
   vatRate: number;
   pricesIncludeVat: boolean;
@@ -20,11 +22,21 @@ export interface TaxComplianceSettings {
   vrnNumber: string;
   receiptBusinessName: string;
   receiptFooterNote: string;
+  /**
+   * Default how purchase / stock-in applies VAT for VAT/TRA shops:
+   * - none: lines start without tax (user can still set per line)
+   * - all: apply VAT 18% to every PO/stock-in line
+   * - vat_products: apply VAT only to products marked standard VAT
+   */
+  purchaseVatScope: 'none' | 'all' | 'vat_products';
+  /** Default note appended on purchases when VAT is applied */
+  purchaseVatNote: string;
 }
 
 export const DEFAULT_TAX_COMPLIANCE_SETTINGS: TaxComplianceSettings = {
   mode: 'manual',
-  vatEnabled: true,
+  vatRegistered: false,
+  vatEnabled: false,
   vatRate: 0.18,
   pricesIncludeVat: false,
   discountEnabled: true,
@@ -42,6 +54,8 @@ export const DEFAULT_TAX_COMPLIANCE_SETTINGS: TaxComplianceSettings = {
   vrnNumber: '',
   receiptBusinessName: '',
   receiptFooterNote: '',
+  purchaseVatScope: 'none',
+  purchaseVatNote: '',
 };
 
 const STORAGE_PREFIX = 'dukamkononi_tax_compliance_';
@@ -58,7 +72,12 @@ export function loadTaxComplianceSettings(
   try {
     const raw = localStorage.getItem(storageKeyForTenant(tenantId));
     if (!raw) return defaults;
-    return { ...defaults, ...JSON.parse(raw) as Partial<TaxComplianceSettings> };
+    const parsed = JSON.parse(raw) as Partial<TaxComplianceSettings>;
+    const merged = { ...defaults, ...parsed };
+    if (parsed.vatRegistered === undefined) {
+      merged.vatRegistered = parsed.mode !== 'non_vat' && Boolean(parsed.vatEnabled);
+    }
+    return normalizeTaxComplianceSettings(merged);
   } catch {
     return defaults;
   }
@@ -84,6 +103,129 @@ export interface SaleTotalsResult {
   total: number;
 }
 
+/** VAT is off for non-VAT shops and when explicitly disabled in manual mode. */
+export function isVatActive(settings: TaxComplianceSettings): boolean {
+  if (!settings.vatRegistered || settings.mode === 'non_vat') return false;
+  if (settings.mode === 'tra_efd') return true;
+  return settings.vatEnabled;
+}
+
+export type BranchVatOverride = boolean | null;
+
+const BRANCH_VAT_PREFIX = 'dukamkononi_branch_vat_';
+
+function branchVatStorageKey(tenantId?: string | null): string {
+  return `${BRANCH_VAT_PREFIX}${tenantId || 'default'}`;
+}
+
+export function loadBranchVatOverrides(tenantId?: string | null): Record<string, BranchVatOverride> {
+  try {
+    const raw = localStorage.getItem(branchVatStorageKey(tenantId));
+    if (!raw) return {};
+    return JSON.parse(raw) as Record<string, BranchVatOverride>;
+  } catch {
+    return {};
+  }
+}
+
+export function getBranchVatOverride(
+  tenantId: string | null | undefined,
+  branchId?: string | null,
+): BranchVatOverride | undefined {
+  if (!branchId || branchId === 'all') return undefined;
+  return loadBranchVatOverrides(tenantId)[branchId];
+}
+
+export function saveBranchVatOverride(
+  tenantId: string | null | undefined,
+  branchId: string,
+  override: BranchVatOverride,
+): void {
+  const all = loadBranchVatOverrides(tenantId);
+  if (override === null) {
+    delete all[branchId];
+  } else {
+    all[branchId] = override;
+  }
+  localStorage.setItem(branchVatStorageKey(tenantId), JSON.stringify(all));
+}
+
+/** Resolve tenant tax settings with optional branch override (null = inherit org default). */
+export function resolveEffectiveTaxSettings(
+  org: TaxComplianceSettings,
+  branchVatRegistered?: boolean | null,
+): TaxComplianceSettings {
+  if (branchVatRegistered === null || branchVatRegistered === undefined) {
+    return org;
+  }
+  if (!branchVatRegistered) {
+    return normalizeTaxComplianceSettings({
+      ...org,
+      vatRegistered: false,
+      mode: 'non_vat',
+      vatEnabled: false,
+      showVatOnReceipt: false,
+      pricesIncludeVat: false,
+    });
+  }
+  if (org.mode === 'non_vat' || !org.vatRegistered) {
+    return normalizeTaxComplianceSettings({
+      ...org,
+      vatRegistered: true,
+      mode: 'manual',
+      vatEnabled: true,
+    });
+  }
+  return normalizeTaxComplianceSettings({ ...org, vatRegistered: true });
+}
+
+/** Resolve tax settings for a sale at a branch (used outside React context). */
+export function resolveSaleTaxSettingsForBranch(
+  tenantId: string | null | undefined,
+  branchId?: string | null,
+  branchVatRegistered?: boolean | null,
+): TaxComplianceSettings {
+  const org = loadTaxComplianceSettings(tenantId);
+  const stored = getBranchVatOverride(tenantId, branchId);
+  const override =
+    branchVatRegistered !== undefined && branchVatRegistered !== null
+      ? branchVatRegistered
+      : stored;
+  return resolveEffectiveTaxSettings(org, override ?? null);
+}
+
+/** Normalize settings after mode/profile changes so stored values stay consistent. */
+export function normalizeTaxComplianceSettings(settings: TaxComplianceSettings): TaxComplianceSettings {
+  if (settings.mode === 'non_vat' || !settings.vatRegistered) {
+    return {
+      ...settings,
+      vatRegistered: false,
+      mode: 'non_vat',
+      vatEnabled: false,
+      showVatOnReceipt: false,
+      showTraSignature: false,
+      pricesIncludeVat: false,
+    };
+  }
+  if (settings.mode === 'tra_efd') {
+    return {
+      ...settings,
+      vatRegistered: true,
+      vatEnabled: true,
+      showTraSignature: true,
+    };
+  }
+  if (!settings.vatEnabled) {
+    return {
+      ...settings,
+      vatRegistered: true,
+      showVatOnReceipt: false,
+      pricesIncludeVat: false,
+    };
+  }
+  return { ...settings, vatRegistered: true };
+}
+
 export function calculateSaleTotals(
   { subtotal, discountPercent = 0 }: SaleTotalsInput,
   settings: TaxComplianceSettings,
@@ -95,7 +237,7 @@ export function calculateSaleTotals(
   const taxableAmount = subtotal - discountAmount;
 
   let vatAmount = 0;
-  if (settings.vatEnabled) {
+  if (isVatActive(settings)) {
     if (settings.pricesIncludeVat) {
       vatAmount = Math.round(taxableAmount - taxableAmount / (1 + settings.vatRate));
     } else {
@@ -111,7 +253,7 @@ export function calculateSaleTotals(
 }
 
 export function formatVatLabel(settings: TaxComplianceSettings, isSw: boolean): string {
-  if (!settings.vatEnabled) {
+  if (!isVatActive(settings)) {
     return isSw ? 'Kodi (imezimwa)' : 'Tax (disabled)';
   }
   const pct = Math.round(settings.vatRate * 1000) / 10;
@@ -140,11 +282,16 @@ export function getComplianceStatusLabel(settings: TaxComplianceSettings, isSw: 
   if (settings.mode === 'tra_efd') {
     return isSw ? 'TRA EFD VFD 2.0 Synced' : 'TRA EFD VFD 2.0 Synced';
   }
+  if (settings.mode === 'non_vat') {
+    return isSw ? 'Duka bila usajili wa VAT/TRA' : 'Non-VAT / not TRA registered';
+  }
   return isSw ? 'Hali ya Kawaida (Bila TRA EFD)' : 'Manual mode (no TRA EFD)';
 }
 
-export function getComplianceBadgeTone(settings: TaxComplianceSettings): 'tra' | 'manual' {
-  return settings.mode === 'tra_efd' ? 'tra' : 'manual';
+export function getComplianceBadgeTone(settings: TaxComplianceSettings): 'tra' | 'manual' | 'non_vat' {
+  if (settings.mode === 'tra_efd') return 'tra';
+  if (settings.mode === 'non_vat') return 'non_vat';
+  return 'manual';
 }
 
 /** Cap per-line or cart discount according to tenant settings. */

@@ -41,6 +41,9 @@ export interface CustomerTransaction {
   balanceAfter: number;
 }
 
+/** Product purchase/sale VAT class — used when shop applies VAT selectively. */
+export type ProductVatType = 'standard' | 'exempt' | 'zero';
+
 export interface Product {
   id: string;
   name: string;
@@ -58,7 +61,10 @@ export interface Product {
   requiresPrescription?: boolean;
   buyingPrice?: number;
   supplier?: string;
-  vatType?: string;
+  /** standard = VAT 18% eligible; exempt/zero = no purchase/sale VAT line */
+  vatType?: ProductVatType | string;
+  /** Product photo (data URL or remote URL) shown in inventory, POS, stock forms */
+  imageUrl?: string;
   description?: string;
   location?: string;
   isDrug?: boolean;
@@ -89,6 +95,8 @@ export interface StoreBranch {
   stockValuationTzs: number;
   traEfdSerial: string;
   openingHours: string;
+  /** null/undefined = inherit organization tax status */
+  vatRegistered?: boolean | null;
   notes?: string;
   createdDate: string;
 }
@@ -156,7 +164,8 @@ export interface SaleTransaction {
   }[];
   subtotal: number;
   discountAmount?: number;
-  vatAmount: number; // 18% TRA VAT
+  cartDiscountPercent?: number;
+  vatAmount: number;
   total: number;
   paidAmount: number;
   balanceRemaining: number;
@@ -178,6 +187,8 @@ export interface SaleTransaction {
   tableId?: string;
   orderId?: string;
   branchId?: string;
+  /** ISO date (YYYY-MM-DD) when credit/partial balance is due — required when balanceRemaining > 0. */
+  paymentDueDate?: string;
 }
 
 export type CalendarEventCategory = 
@@ -220,6 +231,8 @@ export interface Supplier {
   totalPurchases?: number;
 }
 
+export type PurchaseTaxId = 'none' | 'vat_18';
+
 export interface PurchaseOrderItem {
   productId?: string; // undefined or empty if brand new product
   productName: string;
@@ -232,7 +245,11 @@ export interface PurchaseOrderItem {
   unit?: string;
   batchNumber?: string;
   expiryDate?: string;
+  /** Untaxed line amount (qty × unit price). */
   total: number;
+  taxId?: PurchaseTaxId;
+  taxRate?: number;
+  taxAmount?: number;
   isNewProduct?: boolean;
   unitCost?: number;
   totalCost?: number;
@@ -247,6 +264,7 @@ export interface PurchaseOrder {
   supplierName: string;
   dateCreated: string;
   expectedDate: string;
+  orderDeadline?: string;
   receivedDate?: string;
   status: 'draft' | 'sent' | 'received' | 'partially_received' | 'cancelled';
   items: PurchaseOrderItem[];
@@ -259,7 +277,16 @@ export interface PurchaseOrder {
   paymentStatus?: 'paid' | 'credit' | 'partial';
   paymentMethod?: string;
   notes?: string;
+  /** Extra note specifically for VAT / TRA on this purchase */
+  vatNote?: string;
+  /** How VAT was applied on this PO: none | all lines | only VAT-class products */
+  purchaseVatScope?: 'none' | 'all' | 'vat_products';
   invoiceRefNumber?: string;
+  vendorReference?: string;
+  currency?: string;
+  deliverTo?: string;
+  askConfirmation?: boolean;
+  fiscalPosition?: string;
   receivedBy?: string;
   branchId?: string;
 }
@@ -347,6 +374,8 @@ export interface StaffPermissions {
   canSellPOS: boolean;
   canGiveCredit: boolean;
   canModifyInventory: boolean;
+  /** View stock list/prices without editing (cashier lookup). */
+  canViewInventory: boolean;
   canViewProfitReports: boolean;
   canManageSuppliers: boolean;
   canApproveDiscounts: boolean;

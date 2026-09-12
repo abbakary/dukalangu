@@ -1,6 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { api } from '@/lib/api';
 import { resolveStaffPermissions } from '@/lib/apiSync';
+import { computeCashierLeaderboard } from '@/lib/analyticsCompute';
+import type { SaleTransaction } from '@/types/v1';
 import { 
   Building2, 
   Store, 
@@ -35,7 +37,8 @@ import {
   Filter,
   Check,
   X,
-  ExternalLink
+  ExternalLink,
+  Palette,
 } from 'lucide-react';
 import { 
   AuthUser, 
@@ -49,6 +52,8 @@ import {
 import { formatTSh } from '@/utils/translations';
 import { ComplianceTrustPanel } from '@/components/v1/ComplianceTrustPanel';
 import { DocumentTemplatesView } from '@/components/v1/DocumentTemplatesView';
+import { BrandThemePanel } from '@/components/v1/BrandThemePanel';
+import { SettingsSectionNav } from '@/components/v1/SettingsSectionNav';
 import { canManageStaffRBAC } from '@/lib/rbac';
 import { useSaasPlans } from '@/context/SaasPlansContext';
 import { derivePaymentStatus, formatPlanPrice, paymentStatusLabel, paymentStatusTone, planBranchLabel, planPeriod } from '@/lib/saasPlans';
@@ -72,6 +77,7 @@ interface AccountSettingsViewProps {
   onNavigate?: (tab: string) => void;
   currentPlanTier?: SaaSPlanTier;
   subscriptionExpiry?: string;
+  sales?: SaleTransaction[];
 }
 
 export const AccountSettingsView: React.FC<AccountSettingsViewProps> = ({
@@ -91,18 +97,46 @@ export const AccountSettingsView: React.FC<AccountSettingsViewProps> = ({
   onNavigate,
   currentPlanTier = 'starter',
   subscriptionExpiry = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
+  sales = [],
 }) => {
   const isSw = language === 'sw';
   const { plans } = useSaasPlans();
   const activePlan = plans.find(p => p.tier === currentPlanTier) ?? plans[0];
   const paymentStatus = derivePaymentStatus(subscriptionExpiry, 'active');
   const canManageTeam = canManageStaffRBAC(currentUser);
-  const [activeTab, setActiveTab] = useState<'profile' | 'team' | 'branches' | 'compliance' | 'documents' | 'billing'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'branding' | 'team' | 'branches' | 'compliance' | 'documents' | 'billing'>('profile');
+
+  const settingsNavItems = [
+    { id: 'profile', labelEn: 'Profile', labelSw: 'Wasifu', icon: <Store className="w-3.5 h-3.5" /> },
+    { id: 'branding', labelEn: 'Logo & Colors', labelSw: 'Nembo & Rangi', icon: <Palette className="w-3.5 h-3.5" /> },
+    { id: 'compliance', labelEn: 'TRA & Tax', labelSw: 'TRA & Kodi', icon: <ShieldCheck className="w-3.5 h-3.5" /> },
+    { id: 'documents', labelEn: 'Documents', labelSw: 'Hati', icon: <FileText className="w-3.5 h-3.5" /> },
+    { id: 'billing', labelEn: 'Plan', labelSw: 'Malipo', icon: <CreditCard className="w-3.5 h-3.5" /> },
+    { id: 'branches', labelEn: 'Branches', labelSw: 'Matawi', icon: <Building2 className="w-3.5 h-3.5" />, managerOnly: true },
+  ].filter(tab => !tab.managerOnly || canManageTeam);
 
   // Internal or external staff list
   const [internalStaffList, setInternalStaffList] = useState<StaffMember[]>([]);
   const staffList = externalStaffList || internalStaffList;
   const setStaffList = externalSetStaffList || setInternalStaffList;
+
+  const cashierBoard = useMemo(() => computeCashierLeaderboard(sales), [sales]);
+  const topCashier = cashierBoard[0];
+
+  const staffWithTodaySales = useMemo(() => {
+    return staffList.map(s => {
+      const row = cashierBoard.find(
+        r => r.cashierName.toLowerCase() === s.name.toLowerCase()
+          || r.cashierName.toLowerCase().includes(s.name.toLowerCase())
+          || s.name.toLowerCase().includes(r.cashierName.toLowerCase()),
+      );
+      return {
+        ...s,
+        todaySalesCount: row?.receipts ?? 0,
+        todayRevenueTzs: row?.revenue ?? 0,
+      };
+    });
+  }, [staffList, cashierBoard]);
 
   // Filter & Search states
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -153,6 +187,7 @@ export const AccountSettingsView: React.FC<AccountSettingsViewProps> = ({
       canSellPOS: true,
       canGiveCredit: false,
       canModifyInventory: false,
+      canViewInventory: true,
       canViewProfitReports: false,
       canManageSuppliers: false,
       canApproveDiscounts: false,
@@ -169,6 +204,7 @@ export const AccountSettingsView: React.FC<AccountSettingsViewProps> = ({
       canSellPOS: false,
       canGiveCredit: false,
       canModifyInventory: false,
+      canViewInventory: false,
       canViewProfitReports: false,
       canManageSuppliers: false,
       canApproveDiscounts: false,
@@ -179,18 +215,19 @@ export const AccountSettingsView: React.FC<AccountSettingsViewProps> = ({
     };
 
     if (role === 'Cashier') {
-      perms = { ...perms, canSellPOS: true, canPerformDailyClosing: true };
+      perms = { ...perms, canSellPOS: true, canViewInventory: true, canPerformDailyClosing: true };
     } else if (role === 'Pharmacist') {
-      perms = { ...perms, canSellPOS: true, canGiveCredit: true, canModifyInventory: true, canManageSuppliers: true, canApproveDiscounts: true, canOverridePrices: true, canVoidReceipts: true };
+      perms = { ...perms, canSellPOS: true, canGiveCredit: true, canModifyInventory: true, canViewInventory: true, canManageSuppliers: true, canApproveDiscounts: true, canOverridePrices: true, canVoidReceipts: true };
     } else if (role === 'Storekeeper') {
-      perms = { ...perms, canModifyInventory: true, canManageSuppliers: true };
+      perms = { ...perms, canModifyInventory: true, canViewInventory: true, canManageSuppliers: true };
     } else if (role === 'Accountant') {
-      perms = { ...perms, canSellPOS: true, canGiveCredit: true, canModifyInventory: true, canViewProfitReports: true, canManageSuppliers: true, canApproveDiscounts: true, canVoidReceipts: true, canPerformDailyClosing: true };
+      perms = { ...perms, canSellPOS: true, canGiveCredit: true, canModifyInventory: true, canViewInventory: true, canViewProfitReports: true, canManageSuppliers: true, canApproveDiscounts: true, canVoidReceipts: true, canPerformDailyClosing: true };
     } else if (role === 'Manager' || role === 'Owner') {
       perms = {
         canSellPOS: true,
         canGiveCredit: true,
         canModifyInventory: true,
+        canViewInventory: true,
         canViewProfitReports: true,
         canManageSuppliers: true,
         canApproveDiscounts: true,
@@ -296,7 +333,7 @@ export const AccountSettingsView: React.FC<AccountSettingsViewProps> = ({
   }, [canManageTeam, activeTab]);
 
   // Filtered staff list
-  const filteredStaff = staffList.filter(s => {
+  const filteredStaff = staffWithTodaySales.filter(s => {
     const matchesSearch = s.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
                           s.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
                           s.phone.includes(searchQuery);
@@ -342,32 +379,15 @@ export const AccountSettingsView: React.FC<AccountSettingsViewProps> = ({
         </div>
       </div>
 
-      {/* Main Tabs */}
-      <div className="flex items-center gap-2 border-b border-[#E1DFDD] pb-px overflow-x-auto">
-        {[
-          { id: 'team', label: isSw ? 'Wahudumu & Mamlaka (RBAC Matrix)' : 'Staff & RBAC Permissions', icon: <Users className="w-4 h-4" />, managerOnly: true },
-          { id: 'profile', label: isSw ? 'Wasifu wa Biashara' : 'Store Profile & Identity', icon: <Store className="w-4 h-4" /> },
-          { id: 'branches', label: isSw ? 'Matawi ya Maduka' : 'Store Branches', icon: <Building2 className="w-4 h-4" />, managerOnly: true },
-          { id: 'compliance', label: isSw ? 'Kodi za TRA & EFD' : 'TRA EFD & Compliance', icon: <ShieldCheck className="w-4 h-4" /> },
-          { id: 'billing', label: isSw ? 'Usajili & Malipo' : 'Plan & Billing', icon: <CreditCard className="w-4 h-4" /> },
-          { id: 'documents', label: isSw ? 'Violezo vya Hati' : 'Document Templates', icon: <FileText className="w-4 h-4" /> },
-        ].filter(tab => tab.id !== 'team' && (!tab.managerOnly || canManageTeam)).map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id as any)}
-            className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold border-b-2 transition-all cursor-pointer whitespace-nowrap ${
-              activeTab === tab.id
-                ? 'border-[#6264A7] text-[#6264A7] bg-white rounded-t-lg shadow-xs'
-                : 'border-transparent text-[#605E5C] hover:text-[#323130] hover:bg-[#F3F2F1]'
-            }`}
-          >
-            {tab.icon}
-            <span>{tab.label}</span>
-          </button>
-        ))}
-      </div>
-
-      {/* TAB 1: STAFF & PERMISSIONS (RBAC) */}
+      {/* Settings layout: compact section nav + content */}
+      <div className="flex flex-col lg:flex-row gap-4 items-start">
+        <SettingsSectionNav
+          items={settingsNavItems}
+          activeId={activeTab}
+          onChange={id => setActiveTab(id as typeof activeTab)}
+          isSw={isSw}
+        />
+        <div className="flex-1 min-w-0 w-full">
       {activeTab === 'team' && canManageTeam && (
         <div className="space-y-6">
           {/* 4 Staff Summary & Performance KPI Cards */}
@@ -391,10 +411,12 @@ export const AccountSettingsView: React.FC<AccountSettingsViewProps> = ({
                 <span className="text-base">🏆</span>
               </div>
               <div className="text-base font-bold text-[#0078D4] mt-1 truncate">
-                Fatuma Ally
+                {topCashier?.cashierName || (isSw ? 'Hakuna bado' : 'None yet')}
               </div>
               <div className="text-[11px] text-emerald-700 font-semibold mt-1 font-mono">
-                {formatTSh(480000)} (38 receipts)
+                {topCashier
+                  ? `${formatTSh(topCashier.revenue)} (${topCashier.receipts} ${isSw ? 'risiti' : 'receipts'})`
+                  : (isSw ? 'Hakuna mauzo leo' : 'No sales today')}
               </div>
             </div>
 
@@ -971,9 +993,16 @@ export const AccountSettingsView: React.FC<AccountSettingsViewProps> = ({
         </div>
       )}
 
+      {activeTab === 'branding' && (
+        <BrandThemePanel language={language} />
+      )}
+
       {activeTab === 'documents' && (
         <DocumentTemplatesView language={language} />
       )}
+
+        </div>
+      </div>
 
       {/* MODAL 1: ADD NEW STAFF WITH ROLE PRESETS */}
       {isAddStaffModalOpen && (
@@ -1107,6 +1136,7 @@ export const AccountSettingsView: React.FC<AccountSettingsViewProps> = ({
                   {[
                     { key: 'canSellPOS', label: 'POS Checkout & Sales' },
                     { key: 'canGiveCredit', label: 'Issue Customer Credit' },
+                    { key: 'canViewInventory', label: 'View Inventory (read-only)' },
                     { key: 'canModifyInventory', label: 'Modify Stock & Prices' },
                     { key: 'canViewProfitReports', label: 'View Financial P&L' },
                     { key: 'canManageSuppliers', label: 'Order from Suppliers' },
@@ -1264,6 +1294,7 @@ export const AccountSettingsView: React.FC<AccountSettingsViewProps> = ({
                 {[
                   { key: 'canSellPOS', label: 'POS Selling & Invoicing', desc: 'Can process sales and print customer receipts' },
                   { key: 'canGiveCredit', label: 'Issue Customer Credit', desc: 'Can approve post-pay / ledger credit sales' },
+                  { key: 'canViewInventory', label: 'View Inventory (read-only)', desc: 'Can look up prices and stock without changing them' },
                   { key: 'canModifyInventory', label: 'Modify Stock & Pricing', desc: 'Can adjust product quantities, buy prices, and write-offs' },
                   { key: 'canViewProfitReports', label: 'View Profit & Margins', desc: 'Can view gross profit, net revenue, and supplier buy costs' },
                   { key: 'canManageSuppliers', label: 'Order from Suppliers', desc: 'Can create POs and record vendor invoice settlements' },

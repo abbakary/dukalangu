@@ -1,4 +1,5 @@
 import type { DocumentBranding, DocumentRenderData, DocumentTemplate } from './documentTemplates';
+import { formatDueDateDisplay } from './dueDate';
 import { documentTypeLabel } from './documentTemplates';
 
 function fmt(n: number): string {
@@ -35,7 +36,7 @@ function headerBlock(
   branding: DocumentBranding,
   isSw: boolean,
 ) {
-  const title = documentTypeLabel(data.documentType, isSw).toUpperCase();
+  const title = (data.titleOverride ?? documentTypeLabel(data.documentType, isSw)).toUpperCase();
   const { theme } = tpl;
   const logo = logoHtml(branding.logoUrl);
 
@@ -85,13 +86,14 @@ function headerBlock(
 }
 
 function customerBlock(data: DocumentRenderData, isSw: boolean): string {
+  const partyLabel = data.partyLabel ?? (isSw ? 'Mteja' : 'Customer');
   const address = data.customerAddress
     ? `<div style="font-size:9px;color:#6B7280;margin-top:2px;">${esc(data.customerAddress)}</div>`
     : '';
   return `
     <div style="margin-bottom:12px;padding:10px 12px;background:#F9FAFB;border-radius:10px;border:1px solid #E5E7EB;">
       <div style="font-size:9px;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.04em;">
-        ${isSw ? 'Mteja' : 'Customer'}
+        ${esc(partyLabel)}
       </div>
       <div style="font-size:11px;font-weight:700;color:#111;margin-top:2px;">${esc(data.customerName)}</div>
       ${address}
@@ -119,22 +121,30 @@ export function renderDocumentPreviewHtml(
   branding: DocumentBranding,
   isSw: boolean,
 ): string {
-  const rows = data.items.slice(0, 8).map(item => {
+  const rows = data.items.slice(0, 24).map(item => {
     const pct = item.discountPercent ?? 0;
     const label = pct > 0 ? `${item.description} (-${pct}%)` : item.description;
     const line = item.unitPrice * item.quantity * (1 - pct / 100);
+    const qtyLabel = item.unit ? `${item.quantity} ${esc(item.unit)}` : String(item.quantity);
     return `<tr>
       <td style="padding:6px 8px;border-bottom:1px solid #E5E7EB;font-size:10px;">${esc(label)}</td>
-      <td style="padding:6px 8px;border-bottom:1px solid #E5E7EB;font-size:10px;text-align:center;">${item.quantity}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #E5E7EB;font-size:10px;text-align:center;">${qtyLabel}</td>
       <td style="padding:6px 8px;border-bottom:1px solid #E5E7EB;font-size:10px;text-align:right;">${fmt(Math.round(item.unitPrice))}</td>
       <td style="padding:6px 8px;border-bottom:1px solid #E5E7EB;font-size:10px;text-align:right;font-weight:600;">${fmt(Math.round(line))}</td>
     </tr>`;
   }).join('');
 
+  const priceCol = data.priceColumnLabel ?? (isSw ? 'Bei' : 'Price');
+  const discountLabel = data.discountLabel ?? (isSw ? 'Punguzo' : 'Discount');
+
   const discountRow = data.showDiscount && data.discountAmount > 0
     ? `<div style="display:flex;justify-content:space-between;font-size:10px;color:#B45309;margin-top:4px;">
-        <span>${isSw ? 'Punguzo' : 'Discount'}</span><span>- ${fmt(data.discountAmount)}</span></div>`
+        <span>${esc(discountLabel)}</span><span>- ${fmt(data.discountAmount)}</span></div>`
     : '';
+
+  const vatRow = data.hideVat
+    ? ''
+    : `<div style="display:flex;justify-content:space-between;font-size:10px;color:#374151;margin-top:4px;"><span>VAT (18%)</span><span>${fmt(data.vatAmount)}</span></div>`;
 
   const notesBlock = data.notes
     ? `<div style="margin-top:10px;padding:8px 10px;background:#FFFBEB;border-radius:8px;border:1px solid #FDE68A;font-size:9px;color:#92400E;">
@@ -159,20 +169,23 @@ export function renderDocumentPreviewHtml(
             <tr style="background:${tpl.theme.primary}15;">
               <th style="padding:6px 8px;text-align:left;font-size:9px;color:${tpl.theme.primary};">${isSw ? 'Bidhaa' : 'Item'}</th>
               <th style="padding:6px 8px;text-align:center;font-size:9px;color:${tpl.theme.primary};">Qty</th>
-              <th style="padding:6px 8px;text-align:right;font-size:9px;color:${tpl.theme.primary};">${isSw ? 'Bei' : 'Price'}</th>
+              <th style="padding:6px 8px;text-align:right;font-size:9px;color:${tpl.theme.primary};">${esc(priceCol)}</th>
               <th style="padding:6px 8px;text-align:right;font-size:9px;color:${tpl.theme.primary};">${isSw ? 'Jumla' : 'Total'}</th>
             </tr>
           </thead>
           <tbody>${rows || `<tr><td colspan="4" style="padding:12px;text-align:center;font-size:10px;color:#9CA3AF;">Sample items</td></tr>`}</tbody>
         </table>
         <div style="margin-top:10px;padding-top:8px;border-top:1px dashed #E5E7EB;">
-          <div style="display:flex;justify-content:space-between;font-size:10px;color:#374151;"><span>Subtotal</span><span>${fmt(data.subtotal + data.discountAmount)}</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:#374151;"><span>Subtotal</span><span>${fmt(data.subtotal + (data.showDiscount ? data.discountAmount : 0))}</span></div>
           ${discountRow}
-          <div style="display:flex;justify-content:space-between;font-size:10px;color:#374151;margin-top:4px;"><span>VAT (18%)</span><span>${fmt(data.vatAmount)}</span></div>
+          ${vatRow}
           <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:800;color:${tpl.theme.primary};margin-top:6px;"><span>TOTAL</span><span>${fmt(data.total)}</span></div>
+          ${data.amountPaid != null && data.amountPaid > 0 ? `<div style="display:flex;justify-content:space-between;font-size:10px;color:#107C10;margin-top:4px;font-weight:700;"><span>${isSw ? 'Imelipwa' : 'Paid'}</span><span>${fmt(data.amountPaid)}</span></div>` : ''}
+          ${data.balanceDue != null && data.balanceDue > 0 ? `<div style="display:flex;justify-content:space-between;font-size:10px;color:#D13438;margin-top:4px;font-weight:700;"><span>${isSw ? 'Deni' : 'Balance due'}</span><span>${fmt(data.balanceDue)}</span></div>` : ''}
+          ${data.paymentDueDate && data.balanceDue != null && data.balanceDue > 0 ? `<div style="display:flex;justify-content:space-between;font-size:10px;color:#92400E;margin-top:4px;font-weight:700;"><span>${isSw ? 'Tarehe ya malipo' : 'Payment due'}</span><span>${esc(formatDueDateDisplay(data.paymentDueDate))}</span></div>` : ''}
         </div>
         ${notesBlock}
-        ${signatureBlock(isSw)}
+        ${data.hideSignature ? '' : signatureBlock(isSw)}
       </div>
       <div style="background:${tpl.theme.primary};color:#fff;font-size:8px;padding:8px 12px;text-align:center;">${esc(branding.footerText)}</div>
     </div>`;
@@ -199,6 +212,58 @@ export function samplePreviewData(documentType: DocumentRenderData['documentType
   };
 }
 
+/** Open browser print dialog to save or print a full-size document. */
+export function printDocument(
+  tpl: DocumentTemplate,
+  data: DocumentRenderData,
+  branding: DocumentBranding,
+  isSw: boolean,
+): boolean {
+  return downloadDocumentPdf(tpl, data, branding, isSw);
+}
+
+/** Open print dialog for arbitrary HTML content (reports, labels, etc.). */
+export function printHtmlPage(title: string, bodyHtml: string, isSw: boolean): boolean {
+  const landscape = /data-orientation=["']landscape["']/.test(bodyHtml);
+  const pageSize = landscape ? 'A4 landscape' : 'A4';
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
+<style>
+@page{size:${pageSize};margin:8mm}
+html,body{margin:0;padding:0;background:#E8EAEE}
+body{padding:12px;font-family:'Segoe UI',system-ui,sans-serif;color:#111}
+.duka-report-paper{box-shadow:none!important;border:none!important;margin:0 auto!important}
+table{border-collapse:collapse;width:100%}
+th,td{border:1px solid #E5E7EB;padding:5px 6px;font-size:10px;text-align:left;vertical-align:top}
+th{background:#F3F4F6;font-weight:700}
+.no-print-hint{margin:0 auto 10px;max-width:900px;padding:8px 12px;background:#EFF6FF;border:1px solid #BFDBFE;border-radius:8px;font-size:12px;color:#1E3A8A}
+@media print{
+  body{background:#fff;padding:0}
+  .no-print,.no-print-hint{display:none!important}
+  .duka-report-paper{width:100%!important;max-width:none!important;padding:0!important}
+}
+</style>
+</head><body>
+<div class="no-print-hint">${isSw
+  ? 'Chapisha au chagua <strong>Save as PDF</strong> / Hifadhi kama PDF kwenye dirisha la print.'
+  : 'Print or choose <strong>Save as PDF</strong> in the print dialog to download this Odoo-style paper report.'}</div>
+${bodyHtml}<script>
+window.addEventListener('load', function () { setTimeout(function () { window.print(); }, 280); });
+</script></body></html>`;
+
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const win = window.open(url, '_blank');
+  if (!win) {
+    URL.revokeObjectURL(url);
+    alert(isSw ? 'Ruhusu dirisha jipya ili kuchapisha / kupakua PDF.' : 'Allow pop-ups to print / download PDF.');
+    return false;
+  }
+  const cleanup = () => URL.revokeObjectURL(url);
+  win.addEventListener('load', cleanup, { once: true });
+  setTimeout(cleanup, 120_000);
+  return true;
+}
+
 /** Open browser print dialog to save or print a full-size document PDF. */
 export function downloadDocumentPdf(
   tpl: DocumentTemplate,
@@ -208,7 +273,7 @@ export function downloadDocumentPdf(
 ): boolean {
   const body = renderDocumentPreviewHtml(tpl, data, branding, isSw)
     .replace('transform:scale(.92);transform-origin:top center;', '');
-  const title = documentTypeLabel(data.documentType, isSw);
+  const title = data.titleOverride ?? documentTypeLabel(data.documentType, isSw);
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
 <style>@page{margin:12mm}body{margin:0;padding:16px;font-family:Segoe UI,system-ui,sans-serif;background:#fff}</style>
 </head><body>${body}<script>

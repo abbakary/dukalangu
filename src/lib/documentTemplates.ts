@@ -195,6 +195,7 @@ export interface DocumentLineItem {
   quantity: number;
   unitPrice: number;
   discountPercent?: number;
+  unit?: string;
 }
 
 export interface DocumentRenderData {
@@ -210,6 +211,24 @@ export interface DocumentRenderData {
   total: number;
   showDiscount: boolean;
   notes?: string;
+  /** Override header title (e.g. Goods Received Note, Payslip). */
+  titleOverride?: string;
+  /** Override party block label (default Customer / Mteja). */
+  partyLabel?: string;
+  /** Override price column header (default Price / Bei). */
+  priceColumnLabel?: string;
+  /** Override discount row label. */
+  discountLabel?: string;
+  /** Hide VAT row on procurement / internal docs. */
+  hideVat?: boolean;
+  /** Hide signature block. */
+  hideSignature?: boolean;
+  /** Credit/partial — amount already paid at POS. */
+  amountPaid?: number;
+  /** Credit/partial — outstanding balance. */
+  balanceDue?: number;
+  /** ISO date when balance is due. */
+  paymentDueDate?: string;
 }
 
 export function documentTypeLabel(type: DocumentType, isSw: boolean): string {

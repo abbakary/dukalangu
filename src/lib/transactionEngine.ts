@@ -50,6 +50,7 @@ export interface OpenTransactionDraft {
   status: TransactionLifecycleStatus;
   branchId?: string;
   tableId?: string;
+  paymentDueDate?: string;
 }
 
 export interface CompletionGap {
@@ -133,11 +134,20 @@ export function analyzeCompletionGaps(
     });
   }
   const needsCustomer = sale.type === 'credit' || (sale.type === 'partial' && (sale.balanceRemaining ?? 0) > 0);
+  const needsDueDate = (sale.balanceRemaining ?? 0) > 0;
   if (needsCustomer && !sale.customerId) {
     gaps.push({
       field: 'customer',
       labelEn: 'Customer required for credit/partial',
       labelSw: 'Mteja anahitajika kwa mkopo/malipo ya awamu',
+      severity: 'critical',
+    });
+  }
+  if (needsDueDate && !sale.paymentDueDate?.trim()) {
+    gaps.push({
+      field: 'payment_due_date',
+      labelEn: 'Payment due date required',
+      labelSw: 'Tarehe ya malipo inahitajika',
       severity: 'critical',
     });
   }
@@ -176,6 +186,8 @@ export interface BuildSaleParams {
   branchId?: string;
   tableId?: string;
   receiptNumber?: string;
+  cartDiscountPercent?: number;
+  paymentDueDate?: string;
 }
 
 export function buildSaleFromCart(params: BuildSaleParams): SaleTransaction {
@@ -202,7 +214,11 @@ export function buildSaleFromCart(params: BuildSaleParams): SaleTransaction {
     })),
     taxSettings,
   );
-  const saleTotals = calculateSaleTotals({ subtotal, discountPercent: 0 }, taxSettings);
+  const cartPct =
+    taxSettings.cartDiscountEnabled && (params.cartDiscountPercent ?? 0) > 0
+      ? params.cartDiscountPercent ?? 0
+      : 0;
+  const saleTotals = calculateSaleTotals({ subtotal, discountPercent: cartPct }, taxSettings);
   const total = saleTotals.total;
   const actualPaid =
     paymentMode === 'full' ? total : paymentMode === 'credit' ? 0 : amountPaid;
@@ -252,7 +268,8 @@ export function buildSaleFromCart(params: BuildSaleParams): SaleTransaction {
       };
     }),
     subtotal: saleTotals.subtotal,
-    discountAmount,
+    discountAmount: discountAmount + saleTotals.discountAmount,
+    cartDiscountPercent: cartPct,
     vatAmount: saleTotals.vatAmount,
     total,
     paidAmount: actualPaid,
@@ -269,6 +286,10 @@ export function buildSaleFromCart(params: BuildSaleParams): SaleTransaction {
     status,
     branchId,
     tableId,
+    paymentDueDate:
+      balanceRemaining > 0 && params.paymentDueDate?.trim()
+        ? params.paymentDueDate.trim()
+        : undefined,
   };
 }
 

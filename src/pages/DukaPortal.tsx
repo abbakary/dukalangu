@@ -50,7 +50,10 @@ import {
 } from '@/lib/emptyDefaults';
 import { Sidebar } from '@/components/v1/Sidebar';
 import { SuperAdminSidebar } from '@/components/v1/SuperAdminSidebar';
+import { ModuleHubView } from '@/components/v1/ModuleHubView';
+import { ModuleContextBar } from '@/components/v1/ModuleContextBar';
 import { Header } from '@/components/v1/Header';
+import { isModuleHubTab } from '@/lib/appModules';
 import { DashboardView } from '@/components/v1/DashboardView';
 import { SuperAdminDashboardView } from '@/components/v1/SuperAdminDashboardView';
 import { SuperAdminTenantsView } from '@/components/v1/SuperAdminTenantsView';
@@ -89,13 +92,24 @@ import {
   type OpenTransactionDraft,
 } from '@/lib/transactionEngine';
 import { TaxComplianceProvider } from '@/context/TaxComplianceContext';
+import { TraReceiptProvider } from '@/context/TraReceiptContext';
 import { DocumentTemplateProvider } from '@/context/DocumentTemplateContext';
+import { TraEfdHubView } from '@/components/v1/TraEfdHubView';
+import { TenantThemeProvider } from '@/context/TenantThemeContext';
 import { AIChatbotDrawer } from '@/components/v1/AIChatbotDrawer';
 import { WorkplaceView } from '@/components/v1/WorkplaceView';
 import confetti from 'canvas-confetti';
 import { api } from '@/lib/api';
 import { mapApiUserToAuthUser, tryRestoreSession, persistAuthUser } from '@/lib/authBridge';
 import { syncTenantFromApi, syncAdminFromApi, saleToApiPayload, fetchDashboardStats, fetchProductsFromApi, fetchCustomersFromApi, mergeCustomersFromApi, mapSupplier, scopeSnapshotByBranch, resolveDefaultBranchId, filterByBranchId, type DashboardStats, type ApiSyncResult } from '@/lib/apiSync';
+import { resolveSaleTaxSettingsForBranch } from '@/lib/taxComplianceSettings';
+import { enforceSaleTaxTotals } from '@/lib/taxEnforcement';
+import { enforceSaleDueDate } from '@/lib/dueDate';
+import {
+  applyPurchaseOrderToProducts,
+  mergePoSellingPricesIntoProducts,
+  poReceiveItemPayload,
+} from '@/lib/purchaseReceive';
 import { saveTenantCache, loadTenantCache, formatCacheAge } from '@/lib/tenantCache';
 import { flushSyncQueue } from '@/lib/offlineSync';
 import {
@@ -148,12 +162,13 @@ function workplaceModeFromTab(tab: string) {
 }
 
 const VENDOR_ROUTE_TABS = [
+  'module-sales', 'module-stock', 'module-finance', 'module-operations',
   'pos', 'customers', 'receivables-payables', 'debts', 'receivables', 'payables',
   'pending-transactions',
   'branches', 'branch-management', 'calendar', 'inventory', 'suppliers', 'reports',
   'analytics', 'bi-analytics', 'bi', 'product-geo-matrix', 'geo-analytics', 'matrix',
   'expenses-payroll', 'expenses', 'payroll', 'predictive', 'forecasting',
-  'admin-approvals', 'admin_approvals', 'profile', 'settings', 'documents', 'transaction-history', 'staff-site',
+  'admin-approvals', 'admin_approvals', 'profile', 'settings', 'documents', 'transaction-history', 'tra-efd', 'staff-site',
   'workplace-reception', 'workplace-kitchen', 'workplace-waiter', 'workplace-restaurant-live',
   'workplace-tables', 'workplace-appointments', 'workplace-prescriptions',
   'workplace-fractional', 'workplace-barcodes',
@@ -256,7 +271,23 @@ export default function DukaPortal() {
     setBusinessName(scoped.businessName);
     if (scoped.plan) setCurrentPlanTier(scoped.plan);
     if (scoped.subscriptionExpiry) setSubscriptionExpiry(scoped.subscriptionExpiry);
-    setProducts(scoped.products);
+    // Keep local photos when API omits image_url (common for large data URLs)
+    setProducts(prev =>
+      scoped.products.map(p => {
+        const prior = prev.find(x => x.id === p.id);
+        return { ...p, imageUrl: p.imageUrl || prior?.imageUrl };
+      }),
+    );
+    void import('@/lib/productImageCache').then(({ mergeProductImages }) =>
+      mergeProductImages(tenantStorageId, scoped.products, []).then(hydrated => {
+        setProducts(prev =>
+          hydrated.map(p => {
+            const prior = prev.find(x => x.id === p.id);
+            return { ...p, imageUrl: p.imageUrl || prior?.imageUrl };
+          }),
+        );
+      }),
+    );
     if (scoped.customersFetchOk !== false) {
       setCustomers(prev =>
         branchScoped
@@ -373,8 +404,30 @@ export default function DukaPortal() {
 
   const refreshProductsFromApi = async () => {
     try {
-      const nextProducts = await fetchProductsFromApi(resolveApiBranchId());
-      setProducts(nextProducts);
+      const nextProducts = await fetchProductsFromApi(resolveApiBranchId(), tenantStorageId);
+      const { mergeProductImages } = await import('@/lib/productImageCache');
+      // Sync merge first — never blank out photos already in state
+      setProducts(prev => {
+        const priorById = new Map(prev.map(p => [p.id, p]));
+        return nextProducts.map(p => ({
+          ...p,
+          imageUrl: p.imageUrl || priorById.get(p.id)?.imageUrl,
+        }));
+      });
+      // Async IDB hydration — also merges with current React state to cover
+      // products whose image_url was omitted by the API (large base64 blobs).
+      setProducts(currentProducts => {
+        void mergeProductImages(tenantStorageId, nextProducts, currentProducts).then(hydrated => {
+          setProducts(prev => {
+            const priorById = new Map(prev.map(p => [p.id, p]));
+            return hydrated.map(p => ({
+              ...p,
+              imageUrl: p.imageUrl || priorById.get(p.id)?.imageUrl,
+            }));
+          });
+        });
+        return currentProducts; // no-op — we only captured currentProducts here
+      });
       const stats = await fetchDashboardStats(resolveApiBranchId());
       if (stats) setDashboardStats(stats);
     } catch {
@@ -498,6 +551,9 @@ export default function DukaPortal() {
     if (activeTab === 'inventory' || activeTab === 'pos') {
       void refreshProductsFromApi();
     }
+    if (activeTab === 'dashboard' || activeTab === 'pos' || activeTab === 'transaction-history' || activeTab === 'reports' || activeTab === 'analytics') {
+      void applyApiTenantData();
+    }
     if (activeTab === 'customers' || activeTab === 'receivables-payables' || activeTab === 'debts' || activeTab === 'receivables' || activeTab === 'payables' || activeTab === 'pos') {
       void refreshCustomersFromApi();
     }
@@ -513,10 +569,10 @@ export default function DukaPortal() {
 
   useEffect(() => {
     if (!currentUser || userRole === 'super_admin') return;
-    if (VENDOR_ROUTE_TABS.includes(activeTab) && !canAccessVendorTab(currentUser, activeTab)) {
+    if (VENDOR_ROUTE_TABS.includes(activeTab) && !canAccessVendorTab(currentUser, activeTab, businessType)) {
       setActiveTab('dashboard');
     }
-  }, [activeTab, currentUser, userRole]);
+  }, [activeTab, currentUser, userRole, businessType]);
 
   // Switch to Staff Workstation Site with RBAC Privileges
   const handleSwitchToStaffSite = (staff: StaffMember) => {
@@ -688,6 +744,18 @@ export default function DukaPortal() {
   // Complete Sale — persists to API when online, queues offline
   const resolveBranchId = () => resolveApiBranchId() ?? branches[0]?.id;
 
+  const taxSettingsForSale = (branchId?: string | null) => {
+    const bid = branchId ?? resolveApiBranchId();
+    return resolveSaleTaxSettingsForBranch(
+      tenantStorageId,
+      bid,
+      branches.find(b => b.id === bid)?.vatRegistered,
+    );
+  };
+
+  const prepareSaleForPersist = (sale: SaleTransaction) =>
+    enforceSaleDueDate(enforceSaleTaxTotals(sale, taxSettingsForSale(sale.branchId)));
+
   const handleOpenTablePayment = (order: RestaurantOrder) => {
     const bid = resolveBranchId() ?? 'hq';
     const ctx = buildPosContextFromOrder(order, bid);
@@ -697,7 +765,14 @@ export default function DukaPortal() {
     setActiveTab('pos');
   };
 
-  const handleCompleteSale = async (sale: SaleTransaction) => {
+  const handleCompleteSale = async (incomingSale: SaleTransaction) => {
+    let sale: SaleTransaction;
+    try {
+      sale = prepareSaleForPersist(incomingSale);
+    } catch (err) {
+      setOfflineNotice(err instanceof Error ? err.message : String(err));
+      return;
+    }
     if (tenantStorageId) {
       removeOpenTransaction(tenantStorageId, sale.id);
     }
@@ -752,7 +827,11 @@ export default function DukaPortal() {
 
     if (isOnline && navigator.onLine && userRole !== 'super_admin') {
       try {
-        await api.createSale(saleToApiPayload(sale, { finalize: true, branchId: resolveApiBranchId() }));
+        await api.createSale(saleToApiPayload(sale, {
+          finalize: true,
+          branchId: resolveApiBranchId(),
+          taxSettings: taxSettingsForSale(sale.branchId),
+        }));
         await completeRestaurantTablePayment(sale, resolveBranchId());
         setPosPreloadCart(null);
         setPosTableLabel(null);
@@ -773,7 +852,11 @@ export default function DukaPortal() {
     setPosTableLabel(null);
     enqueueSyncItem({
       entity_type: 'sale', entity_id: sale.id, action: 'create',
-      payload: saleToApiPayload(sale, { finalize: true, branchId: resolveApiBranchId() }),
+      payload: saleToApiPayload(sale, {
+        finalize: true,
+        branchId: resolveApiBranchId(),
+        taxSettings: taxSettingsForSale(sale.branchId),
+      }),
       client_timestamp: new Date().toISOString(),
     });
     setOfflineNotice(saleQueuedOfflineText(isSw));
@@ -790,12 +873,23 @@ export default function DukaPortal() {
     }
   };
 
-  const handleSavePendingSale = async (sale: SaleTransaction) => {
+  const handleSavePendingSale = async (incomingSale: SaleTransaction) => {
+    let sale: SaleTransaction;
+    try {
+      sale = prepareSaleForPersist(incomingSale);
+    } catch (err) {
+      setOfflineNotice(err instanceof Error ? err.message : String(err));
+      return;
+    }
     sale.branchId = sale.branchId || resolveBranchId();
     removeOpenTransaction(tenantStorageId, sale.id);
     if (isOnline && navigator.onLine && userRole !== 'super_admin') {
       try {
-        await api.createSale(saleToApiPayload(sale, { finalize: false, branchId: resolveApiBranchId() }));
+        await api.createSale(saleToApiPayload(sale, {
+          finalize: false,
+          branchId: resolveApiBranchId(),
+          taxSettings: taxSettingsForSale(sale.branchId),
+        }));
         await applyApiTenantData();
         return;
       } catch {
@@ -810,7 +904,11 @@ export default function DukaPortal() {
       entity_type: 'sale',
       entity_id: sale.id,
       action: 'create',
-      payload: saleToApiPayload(sale, { finalize: false, branchId: resolveApiBranchId() }),
+      payload: saleToApiPayload(sale, {
+        finalize: false,
+        branchId: resolveApiBranchId(),
+        taxSettings: taxSettingsForSale(sale.branchId),
+      }),
       client_timestamp: new Date().toISOString(),
     });
   };
@@ -946,22 +1044,26 @@ export default function DukaPortal() {
 
   // Receive PO via API
   const handleReceivePO = async (poId: string, receivedNotes?: string) => {
+    const targetPO = purchaseOrders.find(po => po.id === poId);
+    if (!targetPO || targetPO.status === 'received') return;
+
     if (isOnline) {
       try {
-        await api.receivePurchaseOrder(poId, receivedNotes);
+        await api.receivePurchaseOrder(poId, {
+          notes: receivedNotes,
+          items: poReceiveItemPayload(targetPO),
+        });
         await applyApiTenantData();
+        setProducts(prev => mergePoSellingPricesIntoProducts(prev, targetPO));
         confetti({ particleCount: 60, spread: 70, origin: { y: 0.6 } });
         return;
       } catch {
         // fallback to local
       }
     }
-    const targetPO = purchaseOrders.find(po => po.id === poId);
-    if (!targetPO || targetPO.status === 'received') return;
 
     const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 16);
 
-    // 1. Mark PO as Received
     setPurchaseOrders(prev => prev.map(po => {
       if (po.id === poId) {
         return {
@@ -974,106 +1076,18 @@ export default function DukaPortal() {
       return po;
     }));
 
-    // 2. Increase Product Quantities & update cost/batch/expiry if supplied
-    const newMovements: StockMovement[] = [];
+    const { products: updatedProducts, movements: newMovements } = applyPurchaseOrderToProducts(
+      products,
+      targetPO,
+      {
+        businessType,
+        language: language === 'sw' ? 'sw' : 'en',
+        operatorName: currentUser?.name || 'Manager',
+        nowIso: nowStr,
+      },
+    );
 
-    setProducts(prev => {
-      const updatedProducts = [...prev];
-
-      targetPO.items.forEach(poItem => {
-        const itemQty = Number(poItem.quantity);
-        const itemCost = Number(poItem.costPrice ?? poItem.unitCost ?? 0);
-        const itemTotal = Number(poItem.total ?? poItem.totalCost ?? itemQty * itemCost);
-        const poRef = targetPO.poNumber || targetPO.orderNumber || targetPO.id;
-
-        let existingIndex = updatedProducts.findIndex(p => p.id === poItem.productId || (poItem.sku && p.sku === poItem.sku));
-
-        if (existingIndex >= 0) {
-          const prod = updatedProducts[existingIndex];
-          const prevStock = prod.stock;
-          const newStock = prevStock + itemQty;
-          const updatedCost = newStock > 0
-            ? Math.round(((prevStock * prod.cost) + (itemQty * itemCost)) / newStock)
-            : (itemCost > 0 ? itemCost : prod.cost);
-
-          newMovements.push({
-            id: `sm-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-            date: nowStr,
-            productId: prod.id,
-            productName: prod.name,
-            sku: prod.sku,
-            type: 'in_purchase',
-            quantity: itemQty,
-            previousStock: prevStock,
-            newStock: newStock,
-            unitCost: itemCost,
-            totalValuation: itemTotal,
-            batchNumber: poItem.batchNumber || prod.batchNumber,
-            expiryDate: poItem.expiryDate || prod.expiryDate,
-            referenceId: poRef,
-            referenceType: 'PURCHASE_ORDER',
-            operatorName: currentUser?.name || 'Manager',
-            notes: `Received PO ${poRef} from ${targetPO.supplierName}`,
-          });
-
-          updatedProducts[existingIndex] = {
-            ...prod,
-            stock: newStock,
-            cost: updatedCost > 0 ? updatedCost : prod.cost,
-            batchNumber: poItem.batchNumber || prod.batchNumber,
-            expiryDate: poItem.expiryDate || prod.expiryDate,
-          };
-        } else {
-          const newProdId = poItem.productId || `prod-${Date.now()}-${Math.floor(Math.random()*1000)}`;
-          const defaultPrice = Math.round(itemCost * 1.35);
-
-          newMovements.push({
-            id: `sm-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-            date: nowStr,
-            productId: newProdId,
-            productName: poItem.productName,
-            sku: poItem.sku,
-            type: 'in_purchase',
-            quantity: itemQty,
-            previousStock: 0,
-            newStock: itemQty,
-            unitCost: itemCost,
-            totalValuation: itemTotal,
-            batchNumber: poItem.batchNumber,
-            expiryDate: poItem.expiryDate,
-            referenceId: poRef,
-            referenceType: 'PURCHASE_ORDER',
-            operatorName: currentUser?.name || 'Manager',
-            notes: `New item provisioned from PO ${poRef}`,
-          });
-
-          updatedProducts.unshift({
-            id: newProdId,
-            name: poItem.productName,
-            category: poItem.category || getDefaultMainCategory(businessType, language === 'sw' ? 'sw' : 'en'),
-            sku: poItem.sku,
-            price: poItem.sellingPrice && poItem.sellingPrice > 0 ? poItem.sellingPrice : defaultPrice,
-            cost: itemCost,
-            stock: itemQty,
-            reorderPoint: Math.max(10, Math.round(itemQty * 0.2)),
-            unit: poItem.unit || getDefaultUnit(businessType),
-            supplier: targetPO.supplierName,
-            batchNumber: poItem.batchNumber,
-            expiryDate: poItem.expiryDate,
-            vatType: 'standard',
-            businessType: businessType,
-            description: `Auto-created from received PO ${poRef}`,
-            location: 'Warehouse Receiving Bay A',
-            isDrug: businessType === 'pharmacy',
-            ...(poItem.metadata ?? {}),
-          } as Product);
-        }
-      });
-
-      return updatedProducts;
-    });
-
-    // 3. Append to Stock Movement Log
+    setProducts(updatedProducts);
     if (newMovements.length > 0) {
       setStockMovements(prev => [...newMovements, ...prev]);
     }
@@ -1290,6 +1304,8 @@ export default function DukaPortal() {
       businessName={businessName || currentUser?.businessName}
       tinNumber={currentUser?.tinNumber}
     >
+    <TraReceiptProvider tenantId={currentUser?.businessId || currentUser?.id}>
+    <TenantThemeProvider tenantId={currentUser?.businessId || currentUser?.id}>
     <DocumentTemplateProvider
       tenantId={currentUser?.businessId || currentUser?.id}
       businessName={businessName || currentUser?.businessName}
@@ -1404,6 +1420,14 @@ export default function DukaPortal() {
         {/* Scrollable View Container */}
         <main className={`flex-1 overflow-y-auto p-4 md:p-6 rounded-2xl shadow-sm ${isSuperAdminMode ? 'bg-[#F9F9F7] border border-[#003322]/10' : 'bg-white/80 backdrop-blur-sm border border-[#E1DFDD]/80'}`}>
           <div className="max-w-7xl mx-auto">
+            {!isSuperAdminMode && (
+              <ModuleContextBar
+                activeTab={activeTab}
+                language={language}
+                businessType={businessType}
+                onNavigate={setActiveTab}
+              />
+            )}
             {/* SUPER ADMIN / SYSTEM PROVIDER VIEWS */}
             {isSuperAdminMode && (
               <>
@@ -1494,6 +1518,22 @@ export default function DukaPortal() {
             {/* VENDOR / SHOP ADMIN & CASHIER VIEWS */}
             {!isSuperAdminMode && (
               <>
+                {isModuleHubTab(activeTab) && (
+                  <ModuleHubView
+                    hubTab={activeTab}
+                    language={language}
+                    businessType={businessType}
+                    currentUser={currentUser}
+                    onNavigate={setActiveTab}
+                    navContext={{
+                      lowStockCount,
+                      overdueCreditCount,
+                      pendingApprovalsCount: applications.filter(a => a.status === 'pending').length,
+                      branchesCount: branches.length,
+                    }}
+                  />
+                )}
+
                 {vendorAccessBlocked && (
                   <div className="mb-4 rounded-2xl border border-rose-300 bg-rose-50 px-4 py-4 text-sm text-rose-900">
                     <p className="font-bold">
@@ -1548,6 +1588,7 @@ export default function DukaPortal() {
                     setActiveBranchId={setActiveBranchId}
                     currentPlanTier={currentPlanTier}
                     setCurrentPlanTier={setCurrentPlanTier}
+                    tenantId={tenantStorageId}
                     onOpenAIChatWithPrompt={handleOpenAIChatWithPrompt}
                     onNavigateToPOS={() => setActiveTab('pos')}
                     onNavigateToInventory={() => setActiveTab('inventory')}
@@ -1643,6 +1684,7 @@ export default function DukaPortal() {
                     products={products}
                     customers={customers}
                     activeBranchId={resolveApiBranchId()}
+                    branchVatRegistered={branches.find(b => b.id === resolveApiBranchId())?.vatRegistered}
                     setCustomers={setCustomers}
                     onCustomersChanged={refreshCustomersFromApi}
                     onCompleteSale={handleCompleteSale}
@@ -1792,7 +1834,6 @@ export default function DukaPortal() {
                     products={products}
                     suppliers={suppliers}
                     purchaseOrders={purchaseOrders}
-                    setPurchaseOrders={setPurchaseOrders}
                     onOpenAIChatWithPrompt={handleOpenAIChatWithPrompt}
                     onNavigateToSuppliers={() => setActiveTab('suppliers')}
                     currentUser={currentUser}
@@ -1816,6 +1857,14 @@ export default function DukaPortal() {
                   <TransactionHistoryView language={language} sales={sales} />
                 )}
 
+                {activeTab === 'tra-efd' && (
+                  <TraEfdHubView
+                    language={language}
+                    businessName={businessName || currentUser?.businessName}
+                    tinNumber={currentUser?.tinNumber}
+                  />
+                )}
+
                 {(activeTab === 'profile' || activeTab === 'settings') && (
                   <AccountSettingsView
                     language={language}
@@ -1834,6 +1883,7 @@ export default function DukaPortal() {
                     onNavigate={setActiveTab}
                     currentPlanTier={currentPlanTier}
                     subscriptionExpiry={subscriptionExpiry}
+                    sales={sales}
                   />
                 )}
               </>
@@ -1862,6 +1912,8 @@ export default function DukaPortal() {
       />
     </div>
     </DocumentTemplateProvider>
+    </TenantThemeProvider>
+    </TraReceiptProvider>
     </TaxComplianceProvider>
   );
 }

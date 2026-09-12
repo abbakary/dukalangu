@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Boxes, 
   Search, 
@@ -40,15 +40,23 @@ import { getWorkplace, getProductNamePlaceholder, getDefaultMainCategory, getDef
 import { getBusinessProfile } from '@/lib/businessEngine';
 import { CategoryTaxonomyPicker, type CategorySelection } from '@/components/v1/CategoryTaxonomyPicker';
 import { DynamicProductForm, type DynamicProductFormValues } from '@/components/v1/DynamicProductForm';
+import { UnitPicker } from '@/components/v1/UnitPicker';
 import { ProductMetaBadges } from '@/components/v1/ProductMetaBadges';
+import { ProductImageThumb, ProductImageUploader } from '@/components/v1/ProductImage';
 import { ActionBar } from '@/components/v1/ActionBar';
+import { useTaxCompliance } from '@/context/TaxComplianceContext';
+import { isVatActive } from '@/lib/taxComplianceSettings';
+import { computePurchaseLineAmounts, type PurchaseVatScope } from '@/lib/purchaseTax';
 import { QRCodeModal } from '@/components/v1/QRCodeModal';
+import { rememberProductImage } from '@/lib/productImageCache';
+import { compressProductImage, readFileAsDataUrl } from '@/lib/imageCompress';
 import confetti from 'canvas-confetti';
 import { api } from '@/lib/api';
 import { fetchProductsFromApi, mapProduct, mapStockMovement, mapSupplier, optionalApiDate, productToApiPayload, supplierToApiPayload } from '@/lib/apiSync';
 import { runWithOfflineQueue } from '@/lib/offlineMutations';
 import { useOfflineStore } from '@/stores';
 import type { SyncQueueItem } from '@/lib/transactionEngine';
+import { resolveUserPermissions } from '@/lib/rbac';
 
 interface InventoryViewProps {
   language: Language;
@@ -95,6 +103,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 }) => {
   const t = (key: any) => getTranslation(language, key);
   const isSw = language === 'sw';
+  const invPerms = resolveUserPermissions(currentUser);
+  const inventoryReadOnly = !invPerms.canModifyInventory;
   const isOnline = useOfflineStore(s => s.isOnline);
   const storageId = tenantId || currentUser?.businessId || currentUser?.id || 'local';
   const enqueue = enqueueSyncItem ?? (() => {});
@@ -105,6 +115,17 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   const showBatch = workplace.features?.batch_tracking ?? false;
   const showExpiry = workplace.features?.expiry_alerts ?? false;
   const showBarcode = workplace.features?.barcode_scan ?? false;
+  const { settings: taxSettings } = useTaxCompliance();
+  const purchaseVatAvailable = isVatActive(taxSettings) || taxSettings.mode === 'tra_efd';
+  const defaultPurchaseVatScope = (taxSettings.purchaseVatScope ?? 'none') as PurchaseVatScope;
+
+  React.useEffect(() => {
+    setManualStockInForm(prev => ({
+      ...prev,
+      applyVat: purchaseVatAvailable && defaultPurchaseVatScope !== 'none',
+      vatNote: prev.vatNote || taxSettings.purchaseVatNote || '',
+    }));
+  }, [purchaseVatAvailable, defaultPurchaseVatScope, taxSettings.purchaseVatNote]);
 
   const handleExportInventory = () => {
     const totalValue = products.reduce((s, p) => s + (p.stock * (p.cost || 0)), 0);
@@ -135,6 +156,10 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
   // Sub tabs: 'catalog' | 'stockin' | 'stockout' | 'movements'
   const [activeTab, setActiveTab] = useState<'catalog' | 'stockin' | 'stockout' | 'movements'>('catalog');
+
+  React.useEffect(() => {
+    if (inventoryReadOnly && activeTab === 'stockin') setActiveTab('catalog');
+  }, [inventoryReadOnly, activeTab]);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'low' | 'critical' | 'expiring'>('all');
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
@@ -188,6 +213,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       expiryDate: showExpiry ? '2028-06-30' : '',
       supplierName: suppliers[0]?.name || '',
       supplierId: suppliers[0]?.id || '',
+      imageUrl: '',
+      vatType: 'standard',
     });
     setIsAddingProduct(true);
   };
@@ -205,6 +232,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     expiryDate: showExpiry ? '2028-06-30' : '',
     supplierName: suppliers[0]?.name || '',
     supplierId: suppliers[0]?.id || '',
+    imageUrl: '' as string,
+    vatType: 'standard' as 'standard' | 'exempt' | 'zero',
   });
 
   // Manual Stock In State
@@ -217,6 +246,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     supplierId: suppliers[0]?.id || '',
     supplierName: suppliers[0]?.name || '',
     notes: 'Direct shop stock replenishment',
+    applyVat: false,
+    vatNote: '',
   });
 
   // Stock Out / Damage Adjustment State
@@ -373,6 +404,10 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           ...updated[idx],
           stock: prev + item.quantity,
           cost: item.costPrice > 0 ? item.costPrice : updated[idx].cost,
+          price:
+            item.sellingPrice != null && item.sellingPrice > 0
+              ? item.sellingPrice
+              : updated[idx].price,
           batchNumber: item.batchNumber || updated[idx].batchNumber,
           expiryDate: item.expiryDate || updated[idx].expiryDate,
         };
@@ -477,11 +512,13 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
         expiryDate: dynamicFields.expiry_date ?? newProduct.expiryDate,
         requiresPrescription: Boolean(dynamicFields.requires_prescription),
         businessType,
+        imageUrl: newProduct.imageUrl || undefined,
+        vatType: newProduct.vatType,
+        metadata_json: {
+          ...(dynamicFields.metadata || {}),
+          ...supplierMeta,
+        },
       }),
-      metadata_json: {
-        ...(dynamicFields.metadata || {}),
-        ...supplierMeta,
-      },
       business_type: businessType,
     };
     const tempId = `local-prod-${Date.now()}`;
@@ -496,10 +533,46 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
         payload,
         enqueue,
         executeOnline: async () => {
-          await api.createProduct(payload);
-          const refreshed = await fetchProductsFromApi();
-          setProducts(refreshed);
-          await onProductsChanged?.();
+          const createdRaw = await api.createProduct(payload);
+          const created = mapProduct(createdRaw as Record<string, unknown>);
+          const withImage: Product = {
+            ...created,
+            imageUrl: created.imageUrl || newProduct.imageUrl || undefined,
+            vatType: created.vatType || newProduct.vatType,
+          };
+          if (withImage.imageUrl) {
+            await rememberProductImage(storageId, withImage.id, withImage.imageUrl);
+          }
+          // Show photo immediately — never wait on a full catalog refresh
+          setProducts(prev => [withImage, ...prev.filter(p => p.id !== withImage.id && p.id !== tempId)]);
+          // Background refresh; always keep local photos
+          void fetchProductsFromApi(undefined, storageId)
+            .then(refreshed => {
+              setProducts(prev => {
+                const priorById = new Map(prev.map(p => [p.id, p]));
+                priorById.set(withImage.id, withImage);
+                const byId = new Map(
+                  refreshed.map(p => {
+                    const prior = priorById.get(p.id);
+                    return [
+                      p.id,
+                      {
+                        ...p,
+                        imageUrl:
+                          p.imageUrl ||
+                          prior?.imageUrl ||
+                          (p.id === withImage.id ? withImage.imageUrl : undefined),
+                      },
+                    ] as const;
+                  }),
+                );
+                if (!byId.has(withImage.id)) byId.set(withImage.id, withImage);
+                return Array.from(byId.values());
+              });
+            })
+            .catch(() => {
+              /* already have withImage in state */
+            });
         },
         onQueued: () => onQueueMutation?.('product'),
       });
@@ -517,7 +590,13 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           unit: newProduct.unit || getDefaultUnit(businessType),
           batchNumber: dynamicFields.batch_number ?? newProduct.batchNumber,
           expiryDate: dynamicFields.expiry_date ?? newProduct.expiryDate,
+          imageUrl: newProduct.imageUrl || undefined,
+          vatType: newProduct.vatType,
+          businessType,
         };
+        if (localProd.imageUrl) {
+          void rememberProductImage(storageId, localProd.id, localProd.imageUrl);
+        }
         setProducts(prev => [localProd, ...prev]);
       }
 
@@ -551,6 +630,26 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       return;
     }
 
+    const shouldApplyVat =
+      purchaseVatAvailable &&
+      manualStockInForm.applyVat &&
+      (defaultPurchaseVatScope !== 'vat_products' ||
+        !prod.vatType ||
+        ['standard', 'vat', 'vat_18', 'taxable'].includes(String(prod.vatType).toLowerCase()));
+
+    // When shop default is "all", checking applyVat always taxes; when "vat_products", only VAT-class products.
+    const vatApplies = shouldApplyVat;
+
+    const vatLine = vatApplies
+      ? computePurchaseLineAmounts({ quantity: qty, costPrice: unitCost, taxId: 'vat_18', taxRate: 0.18 })
+      : { untaxed: Math.round(qty * unitCost), taxAmount: 0, lineTotal: Math.round(qty * unitCost) };
+
+    const vatNotePart = manualStockInForm.vatNote.trim() || taxSettings.purchaseVatNote || '';
+    const combinedNotes = [
+      `Manual Stock In: ${manualStockInForm.notes} (${supplierName})`,
+      vatApplies ? `VAT 18%: ${formatTSh(vatLine.taxAmount)}${vatNotePart ? ` — ${vatNotePart}` : ''}` : '',
+    ].filter(Boolean).join(' | ');
+
     const stockPayload = {
       product_id: prod.id,
       quantity: qty,
@@ -560,7 +659,9 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       expiry_date: optionalApiDate(manualStockInForm.expiryDate),
       supplier_id: manualStockInForm.supplierId || undefined,
       supplier_name: supplierName,
-      notes: `Manual Stock In: ${manualStockInForm.notes} (${supplierName})`,
+      notes: combinedNotes,
+      tax_amount: vatLine.taxAmount,
+      apply_vat: vatApplies,
     };
 
     try {
@@ -579,9 +680,13 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             batch_number: manualStockInForm.batchNumber || prod.batchNumber,
             expiry_date: optionalApiDate(manualStockInForm.expiryDate || prod.expiryDate),
             metadata_json: {
+              ...(prod.imageUrl ? { image_url: prod.imageUrl } : {}),
+              ...(prod.vatType ? { vat_type: prod.vatType } : {}),
               supplier_id: manualStockInForm.supplierId || undefined,
               supplier_name: supplierName,
             },
+            image_url: prod.imageUrl || undefined,
+            vat_type: prod.vatType || undefined,
           });
           setProducts(prev => prev.map(p => p.id === prod.id ? mapProduct(updatedRaw as Record<string, unknown>) : p));
           setStockMovements(prev => [mapStockMovement(movRaw as Record<string, unknown>), ...prev]);
@@ -696,6 +801,110 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     }
   };
 
+  const [photoPickProductId, setPhotoPickProductId] = useState<string | null>(null);
+  const photoFileRef = useRef<HTMLInputElement>(null);
+
+  // ── Edit Product modal ──────────────────────────────────────────────────────
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [editForm, setEditForm] = useState<{
+    name: string; category: string; price: string; cost: string;
+    stock: string; reorderPoint: string; unit: string;
+    batchNumber: string; expiryDate: string; supplier: string;
+    description: string; imageUrl: string | undefined;
+  } | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
+
+  const openEditProduct = (prod: Product) => {
+    setEditingProduct(prod);
+    setEditForm({
+      name: prod.name,
+      category: prod.category,
+      price: prod.price.toFixed(0),
+      cost: prod.cost.toFixed(0),
+      stock: prod.stock.toFixed(0),
+      reorderPoint: prod.reorderPoint.toFixed(0),
+      unit: prod.unit,
+      batchNumber: prod.batchNumber || '',
+      expiryDate: prod.expiryDate || '',
+      supplier: prod.supplier || '',
+      description: prod.description || '',
+      imageUrl: prod.imageUrl,
+    });
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingProduct || !editForm) return;
+    setEditSaving(true);
+    try {
+      const payload: Record<string, unknown> = {
+        name: editForm.name.trim(),
+        category: editForm.category,
+        price: Number(editForm.price),
+        cost: Number(editForm.cost),
+        stock: Number(editForm.stock),
+        reorder_point: Number(editForm.reorderPoint),
+        unit: editForm.unit,
+        batch_number: editForm.batchNumber || undefined,
+        expiry_date: editForm.expiryDate || undefined,
+        image_url: editForm.imageUrl || undefined,
+        description: editForm.description || undefined,
+        supplier: editForm.supplier || undefined,
+        metadata_json: {
+          ...(editForm.imageUrl ? { image_url: editForm.imageUrl } : {}),
+          ...(editForm.supplier ? { supplier_name: editForm.supplier } : {}),
+          ...(editForm.description ? { description: editForm.description } : {}),
+        },
+      };
+      const updated = await api.updateProduct(editingProduct.id, payload);
+      const merged: Product = {
+        ...(mapProduct(updated as Record<string, unknown>)),
+        imageUrl: (mapProduct(updated as Record<string, unknown>)).imageUrl || editForm.imageUrl,
+      };
+      if (merged.imageUrl) {
+        await rememberProductImage(storageId, merged.id, merged.imageUrl);
+      }
+      setProducts(prev => prev.map(p => p.id === merged.id ? merged : p));
+      setEditingProduct(null);
+      setEditForm(null);
+      triggerToast(isSw ? 'Bidhaa imesasishwa.' : 'Product updated.');
+    } catch (err) {
+      alert((err as Error).message || (isSw ? 'Imeshindikana kusasisha.' : 'Could not update product.'));
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  const handleUpdateProductPhoto = async (productId: string, file: File | undefined) => {
+    if (!file || !file.type.startsWith('image/')) return;
+    const prod = products.find(p => p.id === productId);
+    if (!prod) return;
+    try {
+      let dataUrl: string;
+      try {
+        ({ dataUrl } = await compressProductImage(file));
+      } catch {
+        dataUrl = await readFileAsDataUrl(file);
+      }
+      if (!dataUrl.startsWith('data:image/')) throw new Error('Invalid image');
+      await rememberProductImage(storageId, productId, dataUrl);
+      setProducts(prev => prev.map(p => (p.id === productId ? { ...p, imageUrl: dataUrl } : p)));
+      if (isOnline) {
+        try {
+          await api.updateProduct(productId, { image_url: dataUrl });
+        } catch {
+          /* keep local photo even if API rejects large payload */
+        }
+      }
+      triggerToast(isSw ? 'Picha imehifadhiwa.' : 'Photo saved.');
+    } catch (err) {
+      alert((err as Error).message || (isSw ? 'Imeshindikana kupakia picha.' : 'Could not upload photo.'));
+    } finally {
+      setPhotoPickProductId(null);
+      if (photoFileRef.current) photoFileRef.current.value = '';
+    }
+  };
+
   // Filter products
   const filteredProducts = products.filter(p => {
     const matchesSearch = productMatchesSearch(p, businessType, searchQuery)
@@ -721,6 +930,17 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
   return (
     <div className="space-y-6 pb-16">
+      <input
+        ref={photoFileRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={e => {
+          const id = photoPickProductId;
+          const file = e.target.files?.[0];
+          if (id) void handleUpdateProductPhoto(id, file);
+        }}
+      />
       {/* Toast Alert */}
       {successToast && (
         <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-xl text-emerald-900 shadow-sm flex items-center gap-3 animate-in fade-in duration-200">
@@ -749,9 +969,11 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             {workplace.features.fractional_units && (isSw ? ' · Vipimo vya sehemu' : ' · Fractional units')}
             {workplace.features.table_management && (isSw ? ' · Meza/KOT' : ' · Table/KOT')}
             {workplace.features.appointments && (isSw ? ' · Miadi' : ' · Appointments')}
+            {inventoryReadOnly && (isSw ? ' · Soma tu (hakuna uhariri)' : ' · View only (no edits)')}
           </p>
         </div>
 
+        {!inventoryReadOnly && (
         <div className="flex items-center gap-2">
           <button
             onClick={() => setIsQuickStockInOpen(true)}
@@ -769,6 +991,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             <span>{t('stockOut')}</span>
           </button>
         </div>
+        )}
       </div>
 
       {/* Financial Valuation KPI Matrix */}
@@ -812,6 +1035,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           <span>Product Catalog ({products.length})</span>
         </button>
 
+        {!inventoryReadOnly && (
         <button
           onClick={() => setActiveTab('stockin')}
           className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
@@ -823,6 +1047,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           <ArrowDownLeft className="w-4 h-4" />
           <span>Inbound Goods & PO Receive ({pendingOrders.length})</span>
         </button>
+        )}
 
         <button
           onClick={() => setActiveTab('movements')}
@@ -911,7 +1136,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               <table className="w-full text-left text-xs">
                 <thead className="bg-[#F8F8F8] border-b border-[#EDEBE9] text-[#605E5C] font-bold uppercase tracking-wider">
                   <tr>
-                    <th className="py-3 px-4">Product Name & Category</th>
+                    <th className="py-3 px-4">{isSw ? 'Picha & Bidhaa' : 'Photo & Product'}</th>
                     <th className="py-3 px-3">{showBatch ? 'SKU & Batch' : 'SKU'}</th>
                     <th className="py-3 px-3">Selling Price</th>
                     <th className="py-3 px-3">Cost Price</th>
@@ -936,15 +1161,34 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                         }`}
                       >
                         <td className="py-3 px-4">
-                          <div className="font-bold text-[#323130]">{prod.name}</div>
-                          <div className="text-[10px] text-[#605E5C]">{prod.category}</div>
-                          <ProductMetaBadges
-                            product={prod}
-                            businessType={businessType}
-                            language={language}
-                            max={3}
-                            className="mt-1"
-                          />
+                          <div className="flex items-center gap-2.5">
+                            <button
+                              type="button"
+                              title={isSw ? 'Badilisha picha' : 'Change photo'}
+                              className="relative group/photo shrink-0 cursor-pointer rounded-lg focus:outline-none focus:ring-2 focus:ring-[#6264A7]"
+                              onClick={e => {
+                                e.stopPropagation();
+                                setPhotoPickProductId(prod.id);
+                                photoFileRef.current?.click();
+                              }}
+                            >
+                              <ProductImageThumb src={prod.imageUrl} name={prod.name} size="lg" />
+                              <span className="pointer-events-none absolute inset-0 rounded-lg bg-black/40 opacity-0 group-hover/photo:opacity-100 flex items-center justify-center text-[9px] font-bold text-white transition-opacity">
+                                {isSw ? 'Picha' : 'Photo'}
+                              </span>
+                            </button>
+                            <div>
+                              <div className="font-bold text-[#323130]">{prod.name}</div>
+                              <div className="text-[10px] text-[#605E5C]">{prod.category}</div>
+                              <ProductMetaBadges
+                                product={prod}
+                                businessType={businessType}
+                                language={language}
+                                max={3}
+                                className="mt-1"
+                              />
+                            </div>
+                          </div>
                         </td>
 
                         <td className="py-3 px-3 font-mono">
@@ -1000,6 +1244,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                             >
                               <QrCode className="w-3.5 h-3.5" />
                             </button>
+                            {!inventoryReadOnly && (
+                            <>
                             <button
                               onClick={() => {
                                 setStockOutForm(prev => ({ ...prev, productId: prod.id, quantity: 1 }));
@@ -1020,6 +1266,15 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                             >
                               + In
                             </button>
+                            <button
+                              onClick={e => { e.stopPropagation(); openEditProduct(prod); }}
+                              className="px-2 py-1 bg-[#EFF6FF] hover:bg-[#DBEAFE] text-[#1D4ED8] rounded-lg font-bold text-[11px] cursor-pointer border border-blue-200"
+                              title={isSw ? 'Hariri bidhaa' : 'Edit product'}
+                            >
+                              ✏️ Edit
+                            </button>
+                            </>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1205,6 +1460,16 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             </div>
 
             <div className="overflow-y-auto flex-1 min-h-0 px-6 py-4 space-y-4 text-xs">
+            <div>
+              <label className="block font-semibold text-[#323130] mb-1">
+                {isSw ? 'Picha ya Bidhaa' : 'Product Photo'}
+              </label>
+              <ProductImageUploader
+                value={newProduct.imageUrl || undefined}
+                onChange={url => setNewProduct(prev => ({ ...prev, imageUrl: url || '' }))}
+                isSw={isSw}
+              />
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="md:col-span-2">
                 <label className="block font-semibold text-[#323130] mb-1">
@@ -1215,7 +1480,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                   required
                   placeholder={productNamePlaceholder}
                   value={newProduct.name}
-                  onChange={e => setNewProduct({ ...newProduct, name: e.target.value })}
+                  onChange={e => setNewProduct(prev => ({ ...prev, name: e.target.value }))}
                   className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white outline-none"
                 />
               </div>
@@ -1226,21 +1491,22 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                   value={categorySel}
                   onChange={(sel) => {
                     setCategorySel(sel);
-                    setNewProduct({ ...newProduct, category: sel.displayPath });
+                    setNewProduct(prev => ({ ...prev, category: sel.displayPath }));
                   }}
                   customCategories={customCategories}
                   onAddCustom={(path) => setCustomCategories(prev => [...prev, path])}
                 />
               </div>
               <div>
-                <label className="block font-semibold text-[#323130] mb-1">{isSw ? 'Kipimo' : 'Unit'}</label>
-                <select
+                <UnitPicker
+                  label={isSw ? 'Kipimo' : 'Unit'}
+                  units={workplace.default_units}
                   value={newProduct.unit}
-                  onChange={e => setNewProduct({ ...newProduct, unit: e.target.value })}
-                  className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white outline-none"
-                >
-                  {workplace.default_units.map(u => <option key={u} value={u}>{u}</option>)}
-                </select>
+                  onChange={unit => setNewProduct(prev => ({ ...prev, unit }))}
+                  isSw={isSw}
+                  selectClassName="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white outline-none"
+                  inputClassName="w-full mt-1.5 px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white outline-none"
+                />
               </div>
             </div>
 
@@ -1250,6 +1516,31 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               values={dynamicFields}
               onChange={setDynamicFields}
             />
+
+            {purchaseVatAvailable && (
+              <div>
+                <label className="block font-semibold text-[#323130] mb-1">
+                  {isSw ? 'Aina ya VAT' : 'VAT class'}
+                </label>
+                <select
+                  value={newProduct.vatType}
+                  onChange={e => setNewProduct(prev => ({
+                    ...prev,
+                    vatType: e.target.value as 'standard' | 'exempt' | 'zero',
+                  }))}
+                  className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white outline-none"
+                >
+                  <option value="standard">{isSw ? 'VAT 18% (kawaida)' : 'Standard VAT 18%'}</option>
+                  <option value="exempt">{isSw ? 'Msamaha wa VAT' : 'VAT exempt'}</option>
+                  <option value="zero">{isSw ? 'Kiwango 0%' : 'Zero-rated'}</option>
+                </select>
+                <p className="text-[10px] text-[#605E5C] mt-1">
+                  {isSw
+                    ? 'Hutumika unapotumia “VAT kwa bidhaa za VAT tu” kwenye ununuzi.'
+                    : 'Used when purchase VAT scope is “VAT products only”.'}
+                </p>
+              </div>
+            )}
 
             <div>
               <label className="block font-semibold text-[#323130] mb-1">
@@ -1261,11 +1552,11 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                   value={newProduct.supplierId || newProduct.supplierName}
                   onChange={e => {
                     const sel = suppliers.find(s => s.id === e.target.value);
-                    setNewProduct({
-                      ...newProduct,
+                    setNewProduct(prev => ({
+                      ...prev,
                       supplierId: sel?.id || '',
                       supplierName: sel?.name || e.target.value,
-                    });
+                    }));
                   }}
                   className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white outline-none"
                 >
@@ -1279,7 +1570,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                   required
                   placeholder={isSw ? 'Jina la msambazaji' : 'Supplier name'}
                   value={newProduct.supplierName}
-                  onChange={e => setNewProduct({ ...newProduct, supplierName: e.target.value, supplierId: '' })}
+                  onChange={e => setNewProduct(prev => ({ ...prev, supplierName: e.target.value, supplierId: '' }))}
                   className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white outline-none"
                 />
               )}
@@ -1291,7 +1582,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 <input
                   type="number"
                   value={newProduct.price}
-                  onChange={e => setNewProduct({ ...newProduct, price: Number(e.target.value) })}
+                  onChange={e => setNewProduct(prev => ({ ...prev, price: Number(e.target.value) }))}
                   className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white outline-none font-bold"
                 />
               </div>
@@ -1300,7 +1591,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 <input
                   type="number"
                   value={newProduct.cost}
-                  onChange={e => setNewProduct({ ...newProduct, cost: Number(e.target.value) })}
+                  onChange={e => setNewProduct(prev => ({ ...prev, cost: Number(e.target.value) }))}
                   className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white outline-none font-bold"
                 />
               </div>
@@ -1309,7 +1600,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 <input
                   type="number"
                   value={newProduct.stock}
-                  onChange={e => setNewProduct({ ...newProduct, stock: Number(e.target.value) })}
+                  onChange={e => setNewProduct(prev => ({ ...prev, stock: Number(e.target.value) }))}
                   className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white outline-none font-bold"
                 />
               </div>
@@ -1318,7 +1609,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 <input
                   type="number"
                   value={newProduct.reorderPoint}
-                  onChange={e => setNewProduct({ ...newProduct, reorderPoint: Number(e.target.value) })}
+                  onChange={e => setNewProduct(prev => ({ ...prev, reorderPoint: Number(e.target.value) }))}
                   className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white outline-none"
                 />
               </div>
@@ -1330,7 +1621,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 <input
                   type="text"
                   value={newProduct.sku}
-                  onChange={e => setNewProduct({ ...newProduct, sku: e.target.value })}
+                  onChange={e => setNewProduct(prev => ({ ...prev, sku: e.target.value }))}
                   className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white outline-none"
                 />
               </div>
@@ -1340,7 +1631,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 <input
                   type="text"
                   value={newProduct.batchNumber}
-                  onChange={e => setNewProduct({ ...newProduct, batchNumber: e.target.value })}
+                  onChange={e => setNewProduct(prev => ({ ...prev, batchNumber: e.target.value }))}
                   className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white outline-none"
                 />
               </div>
@@ -1351,7 +1642,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 <input
                   type="date"
                   value={newProduct.expiryDate}
-                  onChange={e => setNewProduct({ ...newProduct, expiryDate: e.target.value })}
+                  onChange={e => setNewProduct(prev => ({ ...prev, expiryDate: e.target.value }))}
                   className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white outline-none"
                 />
               </div>
@@ -1473,6 +1764,47 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                   className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white outline-none"
                 />
               </div>
+
+              {purchaseVatAvailable && (
+                <div className="p-3 rounded-xl border border-[#E65100]/25 bg-orange-50/40 space-y-2">
+                  <label className="flex items-center gap-2 text-xs font-bold text-[#323130]">
+                    <input
+                      type="checkbox"
+                      checked={manualStockInForm.applyVat}
+                      onChange={e => setManualStockInForm({
+                        ...manualStockInForm,
+                        applyVat: e.target.checked,
+                      })}
+                      className="rounded text-[#E65100]"
+                    />
+                    {isSw ? 'Tumia VAT 18% kwenye stock-in hii' : 'Apply VAT 18% on this stock-in'}
+                  </label>
+                  {defaultPurchaseVatScope === 'vat_products' && (
+                    <p className="text-[10px] text-[#605E5C]">
+                      {isSw
+                        ? 'Duka limeteuliwa “bidhaa za VAT tu” — VAT itatumika iwapo bidhaa ina aina ya VAT ya kawaida.'
+                        : 'Shop default is “VAT products only” — VAT applies if this product is standard VAT class.'}
+                    </p>
+                  )}
+                  {manualStockInForm.applyVat && (
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase text-[#605E5C] mb-1">
+                        {isSw ? 'Kumbuka ya VAT' : 'VAT note'}
+                      </label>
+                      <input
+                        type="text"
+                        value={manualStockInForm.vatNote}
+                        onChange={e => setManualStockInForm({
+                          ...manualStockInForm,
+                          vatNote: e.target.value,
+                        })}
+                        placeholder={taxSettings.purchaseVatNote || (isSw ? 'mf. Bei bila VAT' : 'e.g. Cost excl. VAT')}
+                        className="w-full px-3 py-2 bg-white rounded-lg border border-[#EDEBE9] outline-none"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="flex justify-end gap-2 pt-2 border-t border-[#EDEBE9]">
@@ -1662,6 +1994,212 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
         allProducts={products}
         language={language}
       />
+
+      {/* ================= MODAL: EDIT PRODUCT ================= */}
+      {editingProduct && editForm && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <form
+            onSubmit={handleSaveEdit}
+            className="bg-white rounded-2xl max-w-2xl w-full border border-[#E1DFDD] shadow-2xl flex flex-col max-h-[min(92vh,860px)] overflow-hidden"
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-[#EDEBE9] px-6 py-4 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-blue-50 border border-blue-200 flex items-center justify-center">
+                  <span className="text-base">✏️</span>
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-[#323130]">
+                    {isSw ? 'Hariri Bidhaa' : 'Edit Product'}
+                  </h3>
+                  <p className="text-[11px] text-[#605E5C]">{editingProduct.name} · {editingProduct.sku}</p>
+                </div>
+              </div>
+              <button type="button" onClick={() => { setEditingProduct(null); setEditForm(null); }} className="text-[#605E5C] hover:text-[#323130] cursor-pointer">
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="overflow-y-auto flex-1 min-h-0 px-6 py-5 space-y-4 text-xs">
+
+              {/* Product Photo */}
+              <div>
+                <label className="block font-semibold text-[#323130] mb-1.5">
+                  {isSw ? 'Picha ya Bidhaa' : 'Product Photo'}
+                </label>
+                <ProductImageUploader
+                  value={editForm.imageUrl || undefined}
+                  onChange={url => setEditForm(prev => prev ? { ...prev, imageUrl: url ?? undefined } : prev)}
+                  isSw={isSw}
+                  compact
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Name */}
+                <div className="md:col-span-2">
+                  <label className="block font-semibold text-[#323130] mb-1">
+                    {isSw ? 'Jina la Bidhaa *' : 'Product Name *'}
+                  </label>
+                  <input
+                    required
+                    value={editForm.name}
+                    onChange={e => setEditForm(prev => prev ? { ...prev, name: e.target.value } : prev)}
+                    className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white focus:border-[#6264A7] outline-none"
+                  />
+                </div>
+
+                {/* Category */}
+                <div>
+                  <label className="block font-semibold text-[#323130] mb-1">
+                    {isSw ? 'Kategoria' : 'Category'}
+                  </label>
+                  <input
+                    value={editForm.category}
+                    onChange={e => setEditForm(prev => prev ? { ...prev, category: e.target.value } : prev)}
+                    className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white focus:border-[#6264A7] outline-none"
+                  />
+                </div>
+
+                {/* Unit */}
+                <div>
+                  <label className="block font-semibold text-[#323130] mb-1">
+                    {isSw ? 'Kipimo' : 'Unit'}
+                  </label>
+                  <input
+                    value={editForm.unit}
+                    onChange={e => setEditForm(prev => prev ? { ...prev, unit: e.target.value } : prev)}
+                    className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white focus:border-[#6264A7] outline-none"
+                  />
+                </div>
+
+                {/* Selling price */}
+                <div>
+                  <label className="block font-semibold text-[#323130] mb-1">
+                    {isSw ? 'Bei ya Uuzaji (TSh)' : 'Selling Price (TSh)'}
+                  </label>
+                  <input
+                    type="number" min="0" required
+                    value={editForm.price}
+                    onChange={e => setEditForm(prev => prev ? { ...prev, price: e.target.value } : prev)}
+                    className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white focus:border-[#6264A7] outline-none font-mono"
+                  />
+                </div>
+
+                {/* Cost price */}
+                <div>
+                  <label className="block font-semibold text-[#323130] mb-1">
+                    {isSw ? 'Bei ya Kununulia (TSh)' : 'Cost Price (TSh)'}
+                  </label>
+                  <input
+                    type="number" min="0" required
+                    value={editForm.cost}
+                    onChange={e => setEditForm(prev => prev ? { ...prev, cost: e.target.value } : prev)}
+                    className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white focus:border-[#6264A7] outline-none font-mono"
+                  />
+                </div>
+
+                {/* Stock */}
+                <div>
+                  <label className="block font-semibold text-[#323130] mb-1">
+                    {isSw ? 'Stoo ya Sasa' : 'Current Stock'}
+                  </label>
+                  <input
+                    type="number" min="0"
+                    value={editForm.stock}
+                    onChange={e => setEditForm(prev => prev ? { ...prev, stock: e.target.value } : prev)}
+                    className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white focus:border-[#6264A7] outline-none font-mono"
+                  />
+                </div>
+
+                {/* Reorder point */}
+                <div>
+                  <label className="block font-semibold text-[#323130] mb-1">
+                    {isSw ? 'Kiwango cha Kuagiza' : 'Reorder Point'}
+                  </label>
+                  <input
+                    type="number" min="0"
+                    value={editForm.reorderPoint}
+                    onChange={e => setEditForm(prev => prev ? { ...prev, reorderPoint: e.target.value } : prev)}
+                    className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white focus:border-[#6264A7] outline-none font-mono"
+                  />
+                </div>
+
+                {/* Batch number */}
+                <div>
+                  <label className="block font-semibold text-[#323130] mb-1">
+                    {isSw ? 'Namba ya Bachi' : 'Batch Number'}
+                  </label>
+                  <input
+                    value={editForm.batchNumber}
+                    onChange={e => setEditForm(prev => prev ? { ...prev, batchNumber: e.target.value } : prev)}
+                    className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white focus:border-[#6264A7] outline-none"
+                  />
+                </div>
+
+                {/* Expiry date */}
+                <div>
+                  <label className="block font-semibold text-[#323130] mb-1">
+                    {isSw ? 'Tarehe ya Kuisha' : 'Expiry Date'}
+                  </label>
+                  <input
+                    type="date"
+                    value={editForm.expiryDate}
+                    onChange={e => setEditForm(prev => prev ? { ...prev, expiryDate: e.target.value } : prev)}
+                    className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white focus:border-[#6264A7] outline-none"
+                  />
+                </div>
+
+                {/* Supplier */}
+                <div>
+                  <label className="block font-semibold text-[#323130] mb-1">
+                    {isSw ? 'Msambazaji' : 'Supplier'}
+                  </label>
+                  <input
+                    value={editForm.supplier}
+                    onChange={e => setEditForm(prev => prev ? { ...prev, supplier: e.target.value } : prev)}
+                    className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white focus:border-[#6264A7] outline-none"
+                  />
+                </div>
+
+                {/* Description */}
+                <div className="md:col-span-2">
+                  <label className="block font-semibold text-[#323130] mb-1">
+                    {isSw ? 'Maelezo' : 'Description'}
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={editForm.description}
+                    onChange={e => setEditForm(prev => prev ? { ...prev, description: e.target.value } : prev)}
+                    className="w-full px-3 py-2 bg-[#F3F2F1] rounded-lg border border-[#EDEBE9] focus:bg-white focus:border-[#6264A7] outline-none resize-none"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex justify-end gap-2 px-6 py-4 border-t border-[#EDEBE9] bg-[#FAF9F8] rounded-b-2xl shrink-0">
+              <button
+                type="button"
+                onClick={() => { setEditingProduct(null); setEditForm(null); }}
+                className="px-4 py-1.5 text-xs font-semibold text-[#605E5C] bg-[#F3F2F1] hover:bg-[#EDEBE9] rounded-lg cursor-pointer"
+              >
+                {isSw ? 'Ghairi' : 'Cancel'}
+              </button>
+              <button
+                type="submit"
+                disabled={editSaving}
+                className="px-5 py-1.5 text-xs font-bold text-white bg-[#6264A7] hover:bg-[#555793] disabled:opacity-60 rounded-lg cursor-pointer"
+              >
+                {editSaving
+                  ? (isSw ? 'Inahifadhi…' : 'Saving…')
+                  : (isSw ? 'Hifadhi Mabadiliko' : 'Save Changes')}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 };
