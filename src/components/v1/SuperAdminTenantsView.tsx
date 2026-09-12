@@ -90,6 +90,30 @@ export const SuperAdminTenantsView: React.FC<Props> = ({
 
   const [payForm, setPayForm] = useState({ months: 1, method: 'M-Pesa', reference: '', amount: '' });
 
+  const [createOpen, setCreateOpen] = useState(false);
+
+  const [createBusy, setCreateBusy] = useState(false);
+
+  const [createError, setCreateError] = useState('');
+
+  const [createForm, setCreateForm] = useState({
+
+    business_name: '',
+
+    owner_name: '',
+
+    email: '',
+
+    phone: '+255',
+
+    password: '',
+
+    business_type: 'retail',
+
+    plan: 'starter',
+
+  });
+
 
 
   const filtered = useMemo(() => {
@@ -276,6 +300,96 @@ export const SuperAdminTenantsView: React.FC<Props> = ({
 
 
 
+  const createAccount = async () => {
+
+    setCreateError('');
+
+    const email = createForm.email.trim().toLowerCase();
+
+    if (!createForm.business_name.trim() || !createForm.owner_name.trim()) {
+
+      setCreateError(isSw ? 'Jaza jina la biashara na mmiliki.' : 'Enter business and owner names.');
+
+      return;
+
+    }
+
+    if (!email || !email.includes('@')) {
+
+      setCreateError(isSw ? 'Weka barua pepe sahihi (lazima iwe na @).' : 'Enter a valid owner email (must include @).');
+
+      return;
+
+    }
+
+    if (createForm.password.trim().length < 6) {
+
+      setCreateError(isSw ? 'Nenosiri angalau herufi 6.' : 'Password must be at least 6 characters.');
+
+      return;
+
+    }
+
+    setCreateBusy(true);
+
+    try {
+
+      await api.createAdminTenant({
+
+        business_name: createForm.business_name.trim(),
+
+        owner_name: createForm.owner_name.trim(),
+
+        email,
+
+        phone: createForm.phone.trim() || '+255700000000',
+
+        password: createForm.password.trim(),
+
+        business_type: createForm.business_type,
+
+        plan: createForm.plan,
+
+        status: 'active',
+
+      });
+
+      await reloadTenants(setTenants);
+
+      setCreateOpen(false);
+
+      setCreateForm({
+
+        business_name: '',
+
+        owner_name: '',
+
+        email: '',
+
+        phone: '+255',
+
+        password: '',
+
+        business_type: 'retail',
+
+        plan: 'starter',
+
+      });
+
+    } catch (err) {
+
+      setCreateError(err instanceof Error ? err.message : 'Failed to create account');
+
+    } finally {
+
+      setCreateBusy(false);
+
+    }
+
+  };
+
+
+
   return (
 
     <div className="space-y-5 pb-10">
@@ -359,6 +473,26 @@ export const SuperAdminTenantsView: React.FC<Props> = ({
         >
 
           <Download className="w-4 h-4" /> PDF
+
+        </button>
+
+        <button
+
+          type="button"
+
+          onClick={() => {
+
+            setCreateError('');
+
+            setCreateOpen(true);
+
+          }}
+
+          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#003322] text-white text-xs font-bold cursor-pointer"
+
+        >
+
+          {isSw ? '+ Akaunti mpya' : '+ New account'}
 
         </button>
 
@@ -659,6 +793,212 @@ export const SuperAdminTenantsView: React.FC<Props> = ({
         )}
 
       </div>
+
+
+
+      {createOpen && (
+
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
+
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 space-y-3">
+
+            <h3 className="font-bold text-lg text-[#003322]">
+
+              {isSw ? 'Sajili akaunti mpya ya duka' : 'Create new shop account'}
+
+            </h3>
+
+            {createError && (
+
+              <div className="text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
+
+                {createError}
+
+              </div>
+
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+
+              <div className="sm:col-span-2">
+
+                <label className="text-[10px] font-bold text-slate-500 uppercase">{isSw ? 'Jina la biashara' : 'Business name'}</label>
+
+                <input
+
+                  value={createForm.business_name}
+
+                  onChange={e => setCreateForm(f => ({ ...f, business_name: e.target.value }))}
+
+                  className="w-full mt-1 px-3 py-2 border rounded-lg text-sm"
+
+                />
+
+              </div>
+
+              <div>
+
+                <label className="text-[10px] font-bold text-slate-500 uppercase">{isSw ? 'Jina la mmiliki' : 'Owner name'}</label>
+
+                <input
+
+                  value={createForm.owner_name}
+
+                  onChange={e => setCreateForm(f => ({ ...f, owner_name: e.target.value }))}
+
+                  className="w-full mt-1 px-3 py-2 border rounded-lg text-sm"
+
+                />
+
+              </div>
+
+              <div>
+
+                <label className="text-[10px] font-bold text-slate-500 uppercase">Email *</label>
+
+                <input
+
+                  type="email"
+
+                  required
+
+                  value={createForm.email}
+
+                  onChange={e => setCreateForm(f => ({ ...f, email: e.target.value }))}
+
+                  placeholder="owner@shop.co.tz"
+
+                  className="w-full mt-1 px-3 py-2 border rounded-lg text-sm"
+
+                />
+
+              </div>
+
+              <div>
+
+                <label className="text-[10px] font-bold text-slate-500 uppercase">{isSw ? 'Simu' : 'Phone'}</label>
+
+                <input
+
+                  value={createForm.phone}
+
+                  onChange={e => setCreateForm(f => ({ ...f, phone: e.target.value }))}
+
+                  className="w-full mt-1 px-3 py-2 border rounded-lg text-sm"
+
+                />
+
+              </div>
+
+              <div>
+
+                <label className="text-[10px] font-bold text-slate-500 uppercase">{isSw ? 'Nenosiri' : 'Password'}</label>
+
+                <input
+
+                  type="password"
+
+                  value={createForm.password}
+
+                  onChange={e => setCreateForm(f => ({ ...f, password: e.target.value }))}
+
+                  className="w-full mt-1 px-3 py-2 border rounded-lg text-sm"
+
+                />
+
+              </div>
+
+              <div>
+
+                <label className="text-[10px] font-bold text-slate-500 uppercase">{isSw ? 'Aina' : 'Type'}</label>
+
+                <select
+
+                  value={createForm.business_type}
+
+                  onChange={e => setCreateForm(f => ({ ...f, business_type: e.target.value }))}
+
+                  className="w-full mt-1 px-3 py-2 border rounded-lg text-sm"
+
+                >
+
+                  <option value="retail">Retail</option>
+
+                  <option value="pharmacy">Pharmacy</option>
+
+                  <option value="wholesale">Wholesale</option>
+
+                  <option value="restaurant">Restaurant</option>
+
+                </select>
+
+              </div>
+
+              <div>
+
+                <label className="text-[10px] font-bold text-slate-500 uppercase">Plan</label>
+
+                <select
+
+                  value={createForm.plan}
+
+                  onChange={e => setCreateForm(f => ({ ...f, plan: e.target.value }))}
+
+                  className="w-full mt-1 px-3 py-2 border rounded-lg text-sm"
+
+                >
+
+                  <option value="starter">Starter</option>
+
+                  <option value="growth">Growth</option>
+
+                  <option value="pro">Pro</option>
+
+                </select>
+
+              </div>
+
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+
+              <button
+
+                type="button"
+
+                onClick={() => setCreateOpen(false)}
+
+                className="px-3 py-2 rounded-xl border text-xs font-bold cursor-pointer"
+
+              >
+
+                {isSw ? 'Ghairi' : 'Cancel'}
+
+              </button>
+
+              <button
+
+                type="button"
+
+                disabled={createBusy}
+
+                onClick={() => void createAccount()}
+
+                className="px-3 py-2 rounded-xl bg-[#003322] text-white text-xs font-bold cursor-pointer disabled:opacity-50"
+
+              >
+
+                {createBusy ? (isSw ? 'Inasajili…' : 'Creating…') : (isSw ? 'Sajili' : 'Create')}
+
+              </button>
+
+            </div>
+
+          </div>
+
+        </div>
+
+      )}
 
 
 

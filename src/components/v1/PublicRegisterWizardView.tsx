@@ -83,6 +83,10 @@ export const PublicRegisterWizardView: React.FC<PublicRegisterWizardViewProps> =
     if (s === 1) {
       if (!fullName.trim()) { setError(isSw ? 'Weka jina kamili.' : 'Enter full name.'); return false; }
       if (!regEmail.trim()) { setError(isSw ? 'Weka barua pepe.' : 'Enter email.'); return false; }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(regEmail.trim())) {
+        setError(isSw ? 'Weka barua pepe sahihi (lazima iwe na @).' : 'Enter a valid email address (must include @).');
+        return false;
+      }
       const password = regPassword.trim();
       if (password.length < 6) { setError(isSw ? 'Nenosiri angalau herufi 6.' : 'Password min 6 chars.'); return false; }
       if (password !== regPasswordConfirm.trim()) { setError(isSw ? 'Nenosiri halilingani.' : 'Passwords mismatch.'); return false; }

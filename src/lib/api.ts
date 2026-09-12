@@ -110,6 +110,9 @@ class ApiClient {
     const payload = { ...data };
     if (payload.email) payload.email = payload.email.trim().toLowerCase();
     if (typeof payload.password === 'string') payload.password = payload.password.trim();
+    if (!payload.email || !payload.email.includes('@')) {
+      return Promise.reject(new Error('Enter a valid email address'));
+    }
     if (!payload.password || payload.password.length < 6) {
       return Promise.reject(new Error('Password must be at least 6 characters'));
     }
@@ -296,6 +299,39 @@ class ApiClient {
   getAdminTenants(params?: { status_filter?: string; business_type?: string }) {
     const qs = params ? '?' + new URLSearchParams(Object.entries(params).filter(([, v]) => v).map(([k, v]) => [k, v!])).toString() : '';
     return this.request<Array<Record<string, unknown>>>(`/admin/tenants${qs}`);
+  }
+  createAdminTenant(data: {
+    business_name: string;
+    owner_name: string;
+    email: string;
+    phone: string;
+    password: string;
+    business_type?: string;
+    tin_number?: string;
+    license_number?: string;
+    region?: string;
+    district?: string;
+    plan?: string;
+    status?: string;
+  }) {
+    const payload = {
+      ...data,
+      email: data.email.trim().toLowerCase(),
+      password: data.password.trim(),
+      business_name: data.business_name.trim(),
+      owner_name: data.owner_name.trim(),
+      phone: data.phone.trim(),
+    };
+    if (!payload.email.includes('@')) {
+      return Promise.reject(new Error('Enter a valid owner email address'));
+    }
+    if (payload.password.length < 6) {
+      return Promise.reject(new Error('Password must be at least 6 characters'));
+    }
+    return this.request<Record<string, unknown>>('/admin/tenants', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   }
   approveTenantKyc(id: string) { return this.request(`/admin/tenants/${id}/approve-kyc`, { method: 'POST' }); }
   suspendTenant(id: string) { return this.request(`/admin/tenants/${id}/suspend`, { method: 'POST' }); }
