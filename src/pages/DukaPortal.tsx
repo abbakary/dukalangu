@@ -137,6 +137,7 @@ import { CartItem } from '@/types/v1';
 const StaffRoleSiteView = lazy(() => import('@/components/v1/StaffRoleSiteView').then(m => ({ default: m.StaffRoleSiteView })));
 const BIAnalyticsDashboard = lazy(() => import('@/components/v1/BIAnalyticsDashboard').then(m => ({ default: m.BIAnalyticsDashboard })));
 const ExpensesPayrollView = lazy(() => import('@/components/v1/ExpensesPayrollView').then(m => ({ default: m.ExpensesPayrollView })));
+const StaffUsersView = lazy(() => import('@/components/v1/StaffUsersView').then(m => ({ default: m.StaffUsersView })));
 const PredictiveAnalyticsView = lazy(() => import('@/components/v1/PredictiveAnalyticsView').then(m => ({ default: m.PredictiveAnalyticsView })));
 
 function TabLoading() {
@@ -162,13 +163,14 @@ function workplaceModeFromTab(tab: string) {
 }
 
 const VENDOR_ROUTE_TABS = [
-  'module-sales', 'module-stock', 'module-finance', 'module-operations',
+  'module-sales', 'module-stock', 'module-finance', 'module-operations', 'module-people',
   'pos', 'customers', 'receivables-payables', 'debts', 'receivables', 'payables',
   'pending-transactions',
   'branches', 'branch-management', 'calendar', 'inventory', 'suppliers', 'reports',
   'analytics', 'bi-analytics', 'bi', 'product-geo-matrix', 'geo-analytics', 'matrix',
-  'expenses-payroll', 'expenses', 'payroll', 'predictive', 'forecasting',
-  'admin-approvals', 'admin_approvals', 'profile', 'settings', 'documents', 'transaction-history', 'tra-efd', 'staff-site',
+  'expenses-payroll', 'expenses', 'payroll', 'allowances', 'advances', 'predictive', 'forecasting',
+  'admin-approvals', 'admin_approvals', 'profile', 'settings', 'documents', 'transaction-history', 'tra-efd',
+  'staff', 'team', 'staff-site',
   'workplace-reception', 'workplace-kitchen', 'workplace-waiter', 'workplace-restaurant-live',
   'workplace-tables', 'workplace-appointments', 'workplace-prescriptions',
   'workplace-fractional', 'workplace-barcodes',
@@ -595,7 +597,7 @@ export default function DukaPortal() {
       });
       setUserRole(staff.role === 'Owner' ? 'vendor_owner' : 'vendor_staff');
     }
-    setActiveTab('expenses-payroll');
+    setActiveTab('staff');
     confetti({
       particleCount: 35,
       spread: 55,
@@ -1646,7 +1648,22 @@ export default function DukaPortal() {
                   />
                 )}
 
-                {(activeTab === 'expenses-payroll' || activeTab === 'expenses' || activeTab === 'payroll' || activeTab === 'team' || activeTab === 'staff-site') && (
+                {(activeTab === 'staff' || activeTab === 'team' || activeTab === 'staff-site') && (
+                  <Suspense fallback={<TabLoading />}>
+                  <StaffUsersView
+                    language={language}
+                    staffList={staffList}
+                    setStaffList={setStaffList}
+                    currentUser={currentUser}
+                    sales={sales}
+                    tenantStorageId={tenantStorageId}
+                    onNavigate={setActiveTab}
+                    onSwitchToStaffSite={canSwitchStaffWorkstation(currentUser) ? handleSwitchToStaffSite : undefined}
+                  />
+                  </Suspense>
+                )}
+
+                {(activeTab === 'expenses-payroll' || activeTab === 'expenses' || activeTab === 'payroll' || activeTab === 'allowances' || activeTab === 'advances') && (
                   <Suspense fallback={<TabLoading />}>
                   <ExpensesPayrollView
                     language={language}

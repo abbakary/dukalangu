@@ -20,12 +20,15 @@ import {
   ShieldCheck,
   Sparkles,
   UtensilsCrossed,
+  UserCog,
+  HandCoins,
+  CircleDollarSign,
 } from 'lucide-react';
 import type { AuthUser, BusinessType, Language } from '@/types/v1';
 import { canAccessVendorTab } from '@/lib/rbac';
 import { getBusinessProfile } from '@/lib/businessEngine';
 
-export type AppModuleId = 'home' | 'sales' | 'stock' | 'finance' | 'operations' | 'settings';
+export type AppModuleId = 'home' | 'sales' | 'stock' | 'people' | 'finance' | 'operations' | 'settings';
 
 export interface ModuleTile {
   id: string;
@@ -144,6 +147,49 @@ const STOCK_TILES: ModuleTile[] = [
   },
 ];
 
+const PEOPLE_TILES: ModuleTile[] = [
+  {
+    id: 'staff',
+    tab: 'staff',
+    labelEn: 'Staff & HR',
+    labelSw: 'Wafanyakazi & HR',
+    hintEn: 'Directory, roles, shifts, and performance',
+    hintSw: 'Orodha, nafasi, zamu, na utendaji',
+    icon: UserCog,
+    accent: 'bg-violet-600',
+  },
+  {
+    id: 'payroll',
+    tab: 'payroll',
+    labelEn: 'Monthly payroll',
+    labelSw: 'Mishahara ya mwezi',
+    hintEn: 'Salaries, NSSF, bonuses, and payslips',
+    hintSw: 'Mishahara, NSSF, bonasi, na slipu',
+    icon: Banknote,
+    accent: 'bg-emerald-600',
+  },
+  {
+    id: 'allowances',
+    tab: 'allowances',
+    labelEn: 'Daily stipends',
+    labelSw: 'Posho ya kila siku',
+    hintEn: 'Food and transport claims',
+    hintSw: 'Madai ya chakula na usafiri',
+    icon: HandCoins,
+    accent: 'bg-amber-500',
+  },
+  {
+    id: 'advances',
+    tab: 'advances',
+    labelEn: 'Salary advances',
+    labelSw: 'Mikopo ya mshahara',
+    hintEn: 'Approve and track staff advances',
+    hintSw: 'Idhinisha na fuatilia mikopo',
+    icon: CircleDollarSign,
+    accent: 'bg-sky-600',
+  },
+];
+
 const FINANCE_TILES: ModuleTile[] = [
   {
     id: 'reports',
@@ -168,11 +214,11 @@ const FINANCE_TILES: ModuleTile[] = [
   {
     id: 'expenses',
     tab: 'expenses-payroll',
-    labelEn: 'Expenses & payroll',
-    labelSw: 'Matumizi & mishahara',
-    hintEn: 'Costs, staff pay, and allowances',
-    hintSw: 'Gharama, malipo ya wafanyakazi',
-    icon: Banknote,
+    labelEn: 'Operating expenses',
+    labelSw: 'Matumizi ya uendeshaji',
+    hintEn: 'Rent, utilities, and other costs',
+    hintSw: 'Kodi, bili, na gharama nyingine',
+    icon: Wallet,
     accent: 'bg-rose-500',
   },
 ];
@@ -269,12 +315,22 @@ export function buildAppModules(businessType: BusinessType): AppModule[] {
       tiles: STOCK_TILES,
     },
     {
+      id: 'people',
+      hubTab: 'module-people',
+      labelEn: 'People',
+      labelSw: 'Watu',
+      hintEn: 'Staff, HR, payroll, and stipends',
+      hintSw: 'Wafanyakazi, HR, mishahara, na posho',
+      icon: Users,
+      tiles: PEOPLE_TILES,
+    },
+    {
       id: 'finance',
       hubTab: 'module-finance',
       labelEn: 'Finance',
       labelSw: 'Fedha',
-      hintEn: 'Reports, costs, and payroll',
-      hintSw: 'Ripoti, gharama, mishahara',
+      hintEn: 'Reports and operating costs',
+      hintSw: 'Ripoti na gharama za uendeshaji',
       icon: Wallet,
       tiles: FINANCE_TILES,
     },
@@ -294,8 +350,8 @@ export function buildAppModules(businessType: BusinessType): AppModule[] {
       directTab: 'settings',
       labelEn: 'Settings',
       labelSw: 'Mipangilio',
-      hintEn: 'Account, team, and plan',
-      hintSw: 'Akaunti, timu, na mpango',
+      hintEn: 'Account and plan',
+      hintSw: 'Akaunti na mpango',
       icon: Settings,
       tiles: [],
     },
@@ -326,11 +382,14 @@ export function resolveTabModule(activeTab: string, businessType: BusinessType):
     receivables: 'sales',
     payables: 'sales',
     expenses: 'finance',
-    payroll: 'finance',
+    payroll: 'people',
+    allowances: 'people',
+    advances: 'people',
+    team: 'people',
     bi: 'finance',
     'branch-management': 'operations',
     profile: 'settings',
-    'staff-site': 'finance',
+    'staff-site': 'people',
   };
   const alias = aliasMap[activeTab];
   if (alias) return modules.find(m => m.id === alias) ?? null;

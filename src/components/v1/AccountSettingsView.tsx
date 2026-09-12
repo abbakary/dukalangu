@@ -109,6 +109,7 @@ export const AccountSettingsView: React.FC<AccountSettingsViewProps> = ({
   const settingsNavItems = [
     { id: 'profile', labelEn: 'Profile', labelSw: 'Wasifu', icon: <Store className="w-3.5 h-3.5" /> },
     { id: 'branding', labelEn: 'Logo & Colors', labelSw: 'Nembo & Rangi', icon: <Palette className="w-3.5 h-3.5" /> },
+    { id: 'team', labelEn: 'People & HR', labelSw: 'Watu & HR', icon: <Users className="w-3.5 h-3.5" />, managerOnly: true },
     { id: 'compliance', labelEn: 'TRA & Tax', labelSw: 'TRA & Kodi', icon: <ShieldCheck className="w-3.5 h-3.5" /> },
     { id: 'documents', labelEn: 'Documents', labelSw: 'Hati', icon: <FileText className="w-3.5 h-3.5" /> },
     { id: 'billing', labelEn: 'Plan', labelSw: 'Malipo', icon: <CreditCard className="w-3.5 h-3.5" /> },
@@ -323,7 +324,11 @@ export const AccountSettingsView: React.FC<AccountSettingsViewProps> = ({
   const handleInstantSwitchStaff = (staff: StaffMember) => {
     if (!canManageTeam) return;
     setOpenDropdownStaffId(null);
-    onNavigate?.('expenses-payroll');
+    if (onSwitchToStaffSite) {
+      onSwitchToStaffSite(staff);
+      return;
+    }
+    onNavigate?.('staff');
   };
 
   useEffect(() => {
@@ -383,8 +388,14 @@ export const AccountSettingsView: React.FC<AccountSettingsViewProps> = ({
       <div className="flex flex-col lg:flex-row gap-4 items-start">
         <SettingsSectionNav
           items={settingsNavItems}
-          activeId={activeTab}
-          onChange={id => setActiveTab(id as typeof activeTab)}
+          activeId={activeTab === 'team' ? 'profile' : activeTab}
+          onChange={id => {
+            if (id === 'team') {
+              onNavigate?.('staff');
+              return;
+            }
+            setActiveTab(id as typeof activeTab);
+          }}
           isSw={isSw}
         />
         <div className="flex-1 min-w-0 w-full">

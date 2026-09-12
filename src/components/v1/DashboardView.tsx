@@ -1344,10 +1344,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   <span className="font-semibold text-[#323130]">{peakHours.summary}</span>
                 </div>
                 <button 
-                  onClick={() => onNavigate('expenses-payroll')}
+                  onClick={() => onNavigate('staff')}
                   className="text-xs text-[#0078D4] hover:underline font-bold"
                 >
-                  {isSw ? 'Simamia Posho & Timu →' : 'Manage Stipends & Team →'}
+                  {isSw ? 'Simamia Watu & HR →' : 'Manage People & HR →'}
                 </button>
               </div>
             </div>

@@ -131,7 +131,13 @@ export function canAccessVendorTab(
     payables: canSeeReceivables,
     'expenses-payroll': canSeeExpenses,
     expenses: canSeeExpenses,
-    payroll: canSeeExpenses,
+    payroll: canViewPayrollHub,
+    allowances: canViewPayrollHub,
+    advances: canViewPayrollHub,
+    staff: canManageStaffRBAC,
+    team: canManageStaffRBAC,
+    'staff-site': canManageStaffRBAC,
+    'module-people': () => canManageStaffRBAC(user) || canViewPayrollHub(user),
     inventory: () => {
       const { isOwner, isManager, perms } = roleFlags(user);
       return (
@@ -193,7 +199,7 @@ export function expensesInitialTab(activeTab: string): 'expenses' | 'allowances'
   if (activeTab === 'payroll') return 'payroll';
   if (activeTab === 'allowances') return 'allowances';
   if (activeTab === 'advances') return 'advances';
-  if (activeTab === 'team' || activeTab === 'staff-site') return 'team';
+  if (activeTab === 'team') return 'team';
   return 'expenses';
 }
 
